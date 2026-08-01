@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ERP PoC — Combined View</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+    overflow: hidden;
+  }
+  #layout {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
+  }
+  #lhs {
+    width: 75%;
+    display: flex;
+    flex-direction: column;
+    border-right: 3px solid #333;
+    min-width: 0;
+  }
+  #rhs {
+    width: 25%;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  #tabbar {
+    display: flex;
+    background: #1e1e2e;
+    flex-shrink: 0;
+  }
+  #tabbar button {
+    flex: 1;
+    padding: 10px 8px;
+    border: none;
+    background: #1e1e2e;
+    color: #b8b8c8;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    transition: background 0.15s, color 0.15s;
+  }
+  #tabbar button:hover {
+    background: #2a2a3e;
+    color: #ffffff;
+  }
+  #tabbar button.active {
+    background: #2a2a3e;
+    color: #ffffff;
+    border-bottom: 3px solid #ff4b4b;
+  }
+  #rhs-header {
+    padding: 10px 8px;
+    background: #1e1e2e;
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  iframe {
+    flex: 1;
+    border: none;
+    width: 100%;
+    height: 100%;
+  }
+</style>
+</head>
+<body>
+  <div id="layout">
+    <div id="lhs">
+      <div id="tabbar">
+        <button id="tab-s2c" class="active" onclick="switchApp('s2c')">S2C — Source to Pay</button>
+        <button id="tab-mfg" onclick="switchApp('mfg')">MFG — Manufacturing</button>
+        <button id="tab-o2c" onclick="switchApp('o2c')">O2C — Order to Cash</button>
+      </div>
+      <iframe id="lhs-frame" src="http://localhost:8501"></iframe>
+    </div>
+    <div id="rhs">
+      <div id="rhs-header">🤖 Agent Console</div>
+      <iframe id="rhs-frame" src="http://localhost:8504"></iframe>
+    </div>
+  </div>
+
+<script>
+  const PORTS = { s2c: 8501, mfg: 8502, o2c: 8503 };
+
+  function switchApp(app) {
+    document.getElementById('lhs-frame').src = 'http://localhost:' + PORTS[app];
+    ['s2c', 'mfg', 'o2c'].forEach(function(a) {
+      document.getElementById('tab-' + a).classList.toggle('active', a === app);
+    });
+  }
+
+  // Cross-pane refresh: the Agent Console (RHS) posts this message to
+  // window.top after any action it approves genuinely succeeds (ship,
+  // receive, a new PR, the customer wave, a bulk order upload, a
+  // reset). Reload whichever app is currently showing on the LHS so
+  // the result is visible there without a manual switch-and-back.
+  // Always reloads regardless of which of the three apps is currently
+  // showing, rather than trying to be "smart" about relevance — simpler,
+  // still correct, and an occasional unnecessary reload costs nothing.
+  window.addEventListener('message', function(event) {
+    if (event.data && event.data.type === 'erp_action_approved') {
+      var frame = document.getElementById('lhs-frame');
+      // frame.src = frame.src is a no-op in most browsers when the URL
+      // hasn't actually changed (which it usually hasn't here) -- found
+      // this directly while testing, not assumed. contentWindow.location
+      // .reload() reliably forces a real reload regardless.
+      try {
+        frame.contentWindow.location.reload();
+      } catch (e) {
+        // Cross-origin restrictions can block this in some browsers;
+        // fall back to a cache-busted src reassignment, which always
+        // forces a real navigation since the URL genuinely changes.
+        var base = frame.src.split('?')[0];
+        frame.src = base + '?_refresh=' + Date.now();
+      }
+    }
+  });
+</script>
+</body>
+</html>
