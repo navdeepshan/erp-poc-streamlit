@@ -47,8 +47,7 @@ import importlib
 import seed_manager as sm
 from ui_theme import apply_theme
 
-st.set_page_config(page_title="Agent Console", page_icon="\U0001f916", layout="wide")
-apply_theme()
+# Page configuration and the shared theme are owned by streamlit_app.py.
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 

@@ -50,9 +50,7 @@ python seed_bundle_from_bom.py
 
 ## Run (each in its own terminal)
 ```
-streamlit run erp_ui.py     # Source-to-Pay: Bundles, PR -> PO, RFx, Vendors, Contracts
-streamlit run mfg_ui.py     # Manufacturing: Goods Receipt, QC, BOM, Production, Inventory
-streamlit run o2c_ui.py     # Order-to-Cash: Quotes, Sales Orders, Fulfillment, Billing, Accounting, Cash
+streamlit run streamlit_app.py  # Complete unified ERP suite
 ```
 
 ## What's SQLite-backed (all of it)

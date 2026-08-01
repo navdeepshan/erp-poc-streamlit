@@ -53,9 +53,7 @@ def _build_zip(files):
     return buf.read()
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="ERP Procurement", page_icon="\U0001f4cb",
-                   layout="wide", initial_sidebar_state="expanded")
-apply_theme()
+# Page configuration and the shared theme are owned by streamlit_app.py.
 
 # ── Startup check ─────────────────────────────────────────────────────────────
 # Checks erp_pilot.db, not data.xlsx — data.xlsx hasn't been a real runtime
@@ -73,7 +71,7 @@ if not os.path.exists(db.DB_FILE):
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### \U0001f4cb ERP Procurement")
+    st.markdown('<div class="erp-section-label">SOURCE TO PAY</div>', unsafe_allow_html=True)
     st.divider()
     page = st.radio("", ["\U0001f4e6  Purchase Bundles",
                          "\U0001f195  Create PR",

@@ -6,20 +6,20 @@ import streamlit as st
 THEME_CSS = """
 <style>
 :root {
-  --erp-navy: #102a43;
-  --erp-blue: #2563eb;
-  --erp-blue-dark: #1d4ed8;
-  --erp-cyan: #06b6d4;
-  --erp-ink: #172033;
-  --erp-muted: #64748b;
-  --erp-line: #dbe4ee;
+  --erp-navy: #111827;
+  --erp-blue: #315bea;
+  --erp-blue-dark: #2447c6;
+  --erp-cyan: #0f91a8;
+  --erp-ink: #182033;
+  --erp-muted: #667085;
+  --erp-line: #e1e6ed;
   --erp-surface: #ffffff;
-  --erp-canvas: #f3f7fb;
+  --erp-canvas: #f6f7f9;
 }
 
 .stApp {
   background:
-    radial-gradient(circle at 92% 0%, rgba(37, 99, 235, .08), transparent 24rem),
+    radial-gradient(circle at 88% -4%, rgba(49, 91, 234, .055), transparent 28rem),
     var(--erp-canvas);
 }
 
@@ -31,9 +31,9 @@ THEME_CSS = """
 }
 
 [data-testid="stSidebar"] {
-  background: linear-gradient(180deg, #102a43 0%, #163d61 58%, #102a43 100%);
+  background: #111827;
   border-right: 0;
-  box-shadow: 12px 0 32px rgba(15, 42, 67, .12);
+  box-shadow: 8px 0 24px rgba(17, 24, 39, .08);
 }
 [data-testid="stSidebar"] * { color: #e8f1f8 !important; }
 [data-testid="stSidebar"] hr { border-color: rgba(255,255,255,.14) !important; }
@@ -56,11 +56,11 @@ h4, h5, h6 { color: #243b53 !important; }
 p, label, [data-testid="stCaptionContainer"] { color: var(--erp-muted); }
 
 div[data-testid="stMetric"] {
-  background: linear-gradient(145deg, #ffffff 0%, #f8fbff 100%);
+  background: #ffffff;
   border: 1px solid var(--erp-line);
   border-radius: 14px;
   padding: 1rem 1.1rem;
-  box-shadow: 0 8px 24px rgba(15, 42, 67, .055);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .035);
 }
 div[data-testid="stMetricLabel"] { color: var(--erp-muted) !important; }
 div[data-testid="stMetricValue"] { color: var(--erp-navy) !important; font-weight: 750; }
@@ -74,8 +74,8 @@ div[data-testid="stMetricValue"] { color: var(--erp-navy) !important; font-weigh
 .stButton > button[kind="primary"] {
   color: white !important;
   border: 0 !important;
-  background: linear-gradient(135deg, var(--erp-blue), #0e7490) !important;
-  box-shadow: 0 6px 16px rgba(37, 99, 235, .2);
+  background: var(--erp-blue) !important;
+  box-shadow: 0 2px 5px rgba(49, 91, 234, .18);
 }
 .stButton > button:hover, .stDownloadButton > button:hover {
   transform: translateY(-1px);
@@ -113,10 +113,21 @@ button[data-baseweb="tab"][aria-selected="true"] {
   border: 1px solid var(--erp-line) !important;
   border-radius: 12px !important;
   overflow: hidden;
-  box-shadow: 0 5px 18px rgba(15, 42, 67, .04);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .03);
 }
 [data-testid="stAlert"] { border-radius: 10px; }
 hr { border-color: var(--erp-line) !important; }
+
+.erp-brand { display:flex; align-items:center; gap:.75rem; padding:.35rem .15rem 1rem; }
+.erp-brand-mark { width:2.15rem; height:2.15rem; display:grid; place-items:center;
+  border-radius:.65rem; background:#315bea; color:#fff!important; font-weight:800; font-size:1rem; }
+.erp-brand strong { display:block; color:#fff!important; letter-spacing:-.01em; }
+.erp-brand small { display:block; color:#98a2b3!important; font-size:.58rem; letter-spacing:.12em; margin-top:.12rem; }
+.erp-section-label, .erp-eyebrow { font-size:.67rem; letter-spacing:.13em; font-weight:750; }
+.erp-section-label { color:#98a2b3!important; padding:.6rem .25rem .25rem; }
+.erp-eyebrow { color:#315bea!important; margin-bottom:.5rem; }
+[data-testid="stSidebarNav"] span { font-size:.88rem; }
+[data-testid="stVerticalBlockBorderWrapper"] { background:#fff; border-radius:14px; }
 
 @media (max-width: 768px) {
   [data-testid="stAppViewContainer"] > .main .block-container { padding-top: 1rem; }

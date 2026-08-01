@@ -51,8 +51,7 @@ _DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(_DIR, "data.xlsx")
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-st.set_page_config(page_title="O2C — Order to Cash", page_icon="\U0001f6d2", layout="wide")
-apply_theme()
+# Page configuration and the shared theme are owned by streamlit_app.py.
 
 
 # ── Shared item catalog (mirrors erp_ui.py's loader, same underlying data) ──────
@@ -134,8 +133,7 @@ def item_picker(key_prefix):
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### \U0001f6d2 ERP Suite")
-    st.caption("Order-to-Cash")
+    st.markdown('<div class="erp-section-label">ORDER TO CASH</div>', unsafe_allow_html=True)
     st.divider()
     page = st.radio("", ["\U0001f465  Customer Onboarding",
                          "\U0001f4b0  Quotation",

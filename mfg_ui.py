@@ -51,14 +51,12 @@ _DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(_DIR, "data.xlsx")
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-st.set_page_config(page_title="Manufacturing", page_icon="\U0001f527", layout="wide")
-apply_theme()
+# Page configuration and the shared theme are owned by streamlit_app.py.
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### \U0001f527 ERP Suite")
-    st.caption("Manufacturing")
+    st.markdown('<div class="erp-section-label">MANUFACTURING</div>', unsafe_allow_html=True)
     st.divider()
     page = st.radio("", ["\U0001f4e5  Goods Receipt",
                          "\U0001f50e  Quality Inspection",
