@@ -31,7 +31,6 @@ detail buried in a page.
 import streamlit as st
 from datetime import date, datetime
 import os
-import traceback
 
 import bom
 import po_export
@@ -560,6 +559,10 @@ def handle_help():
 def process_input(text):
     _user_said(text)
     try:
+        if text.strip().lower() in {"error", "errors", "log", "logs", "traceback"}:
+            _say("No technical logs are shown here. Please choose one of the five "
+                 "read-only reports below.")
+            return
         result = ai.match_intent(text)
         intent = result["intent"]
         if intent == "check_at_risk":
@@ -797,7 +800,7 @@ st.markdown("###### Try one of these, or type your own:")
 example_prompts = build_example_prompts()
 cols = st.columns(3)
 for i, prompt in enumerate(example_prompts):
-    if cols[i % 3].button(prompt, key=f"example_{i}", use_container_width=True):
+    if cols[i % 3].button(prompt, key=f"example_{i}", width="stretch"):
         process_input(prompt)
         st.rerun()
 
