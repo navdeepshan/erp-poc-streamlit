@@ -64,69 +64,12 @@ STATIC_PROMPTS = [
     "Show inventory report",
     "Show finance and receivables report",
     "Show procurement report",
-    "What needs action right now?",
 ]
 
 
 def build_example_prompts(data_file=None):
-    """
-    Builds the ship/explain/create-PR example prompts from whatever
-    Item Master and transfer/recommendation data is REALLY loaded right
-    now, rather than fixed strings. Real bug found 2026-07-30: the
-    original hardcoded examples ("ship the scaler to Bangalore" etc.)
-    were IDS Denmed-specific — with Genrobotics data loaded instead,
-    every one of those materials and locations is simply absent, so
-    even the suggested buttons failed material resolution with the
-    exact same "I couldn't find a material matching that" a person
-    would get from a genuinely bad free-text guess. Confirmed directly
-    against real Genrobotics data before concluding this was the root
-    cause, not assumed. This app is meant to work against whichever
-    pilot dataset happens to be loaded, so its own suggested prompts
-    need to as well.
-
-    Prefers a material with a REAL live shortfall (so the resulting
-    proposal is meaningful, not just resolvable) but falls back to the
-    first two active Item Master entries if nothing is currently
-    flagged — either way, every generated prompt references a real
-    name that WILL resolve, even in the fallback case where the
-    resulting action then honestly reports no real opportunity exists,
-    which is a world away from failing at entity resolution itself.
-    """
-    items = po_export.load_item_master(data_file, active_only=True)
-    locs = pc.get_delivery_locations(active_only=True)
-    if not items or not locs:
-        return STATIC_PROMPTS
-
-    recs = bom.get_procurement_recommendations(data_file)
-    at_risk_or_needed = [r for r in recs if r["outcome"] in ("At Risk", "Action Needed")]
-    action_needed = [r for r in recs if r["outcome"] == "Action Needed"]
-    opps = bom.get_transfer_opportunities(data_file)
-
-    prompts = list(STATIC_PROMPTS)
-
-    if opps:
-        o = opps[0]
-        mat_name = _short_name(o["mat_desc"])
-        loc_name = _short_name(_lname(o["to_location"]))
-        prompts.insert(1, f"Ship the {mat_name} to {loc_name}")
-    else:
-        mat_name = _short_name(items[0]["desc"])
-        loc_name = _short_name(locs[-1]["name"] if len(locs) > 1 else locs[0]["name"])
-        prompts.insert(1, f"Ship the {mat_name} to {loc_name}")
-
-    if at_risk_or_needed:
-        mat_name = _short_name(at_risk_or_needed[0]["mat_desc"])
-        prompts.insert(2, f"Why is the {mat_name} flagged?")
-    elif len(items) > 1:
-        prompts.insert(2, f"Why is the {_short_name(items[1]['desc'])} flagged?")
-
-    if action_needed:
-        mat_name = _short_name(action_needed[0]["mat_desc"])
-        prompts.append(f"Create a requisition for the {mat_name}")
-    elif len(items) > 2:
-        prompts.append(f"Create a requisition for the {_short_name(items[2]['desc'])}")
-
-    return prompts
+    """Return only deterministic, seeded-data reporting prompts."""
+    return list(STATIC_PROMPTS)
 
 
 def _short_name(desc):
@@ -151,11 +94,8 @@ def _init_state():
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = [
             {"role": "assistant", "content": (
-                "Hi — I'm the Agent Console for inventory optimization and order "
-                "upload. I work from a curated set of things I understand (see the "
-                "examples below), not open-ended conversation — if I don't recognize "
-                "something, I'll say so rather than guess. Nothing I propose executes "
-                "until you approve it."
+                "Choose a report below to view a safe, read-only summary of the "
+                "seeded ERP data. No technical errors are shown in this chat."
             )},
         ]
     if "pending_action" not in st.session_state:
