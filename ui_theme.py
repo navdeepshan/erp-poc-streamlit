@@ -140,3 +140,11 @@ hr { border-color: var(--erp-line) !important; }
 def apply_theme():
     """Inject the shared app styling after ``st.set_page_config``."""
     st.markdown(THEME_CSS, unsafe_allow_html=True)
+
+
+def embed_html(content, *, height, scrolling=False):
+    """Embed trusted app HTML without emitting Streamlit deprecation warnings."""
+    if hasattr(st, "iframe"):
+        st.iframe(content, width="stretch", height=height)
+    else:  # Compatibility with the older local development runtime.
+        st.components.v1.html(content, height=height, scrolling=scrolling)

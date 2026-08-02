@@ -51,7 +51,7 @@ import goods_receipt as receipts
 import vendor_onboarding as vendors
 import customer_onboarding as customers
 import purchase_bundles as bundles
-from ui_theme import apply_theme
+from ui_theme import apply_theme, embed_html
 
 # Page configuration and the shared theme are owned by streamlit_app.py.
 
@@ -145,7 +145,7 @@ def _render_pending_refresh_notify():
     """
     if st.session_state.get("pending_refresh_notify"):
         st.session_state.pending_refresh_notify = False
-        st.components.v1.html(
+        embed_html(
             "<script>window.top.postMessage({type: 'erp_action_approved'}, '*');</script>",
             height=0,
         )

@@ -33,7 +33,7 @@ import vrq
 import contracts as ct
 import org_defaults as od
 import legal_entities as le
-from ui_theme import apply_theme
+from ui_theme import apply_theme, embed_html
 
 DATA_FILE = os.path.join(_DIR, "data.xlsx")
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -883,7 +883,7 @@ def _flow(result):
           f'<defs><marker id="ahp" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#059669"/></marker>' +
           f'<marker id="ahr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#DC2626"/></marker></defs>' +
           "".join(svg) + '</svg></div>')
-    st.components.v1.html(html, height=SH+80, scrolling=True)
+    embed_html(html, height=SH+80, scrolling=True)
 
 
 def _map(geo):
@@ -950,7 +950,7 @@ V.filter(v=>v.lat).map(v=>`<div><span style="width:12px;height:12px;background:$
 `<div><span style="display:inline-block;width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:12px solid #0284C7;margin-right:6px;vertical-align:middle"></span>Delivery</div>`;return d;}};
 leg.addTo(map);
 </script></body></html>"""
-    st.components.v1.html(html, height=500)
+    embed_html(html, height=500)
     st.caption("Squares=suppliers  \u00b7  Triangles=delivery  \u00b7  Arcs=PO routes  \u00b7  "
                "Use the **Fit** button (top-right of the map) any time to re-frame every point.")
 

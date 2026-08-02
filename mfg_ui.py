@@ -36,7 +36,7 @@ import inventory as inv
 import production as prod
 import accounting as acct
 import vendor_invoices as vi
-from ui_theme import apply_theme
+from ui_theme import apply_theme, embed_html
 
 def load_delivery_locs():
     """Delivery_Locations now lives in SQLite — delegates to
@@ -659,7 +659,7 @@ d.innerHTML="<b style='font-size:11px;color:#6B7280;text-transform:uppercase'>Le
 return d;}};
 leg.addTo(map);
 </script></body></html>"""
-    st.components.v1.html(html, height=460)
+    embed_html(html, height=460)
     st.caption("Line thickness scales with suggested transfer quantity \u00b7 "
               "click a route for the material breakdown \u00b7 **Fit** re-frames the map.")
 
@@ -747,7 +747,7 @@ def _material_flow_svg(vendor_label, vendor_sub, from_name, stays_qty, destinati
 
 <text class="mf-ts" x="340" y="{viewbox_h-16:g}" text-anchor="middle">Gray = received or held \u00b7 amber = suggested transfer</text>
 </svg></div>"""
-    st.components.v1.html(svg, height=viewbox_h + 26)
+    embed_html(svg, height=viewbox_h + 26)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
