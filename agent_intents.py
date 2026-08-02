@@ -132,6 +132,14 @@ INTENTS = [
                 "missing tax info", "items missing tax"],
      "keywords": []},
 
+    {"name": "reporting",
+     "phrases": ["executive summary", "business summary", "management report",
+                "sales report", "sales summary", "inventory report",
+                "inventory summary", "finance report", "financial summary",
+                "receivables report", "cash report", "procurement report",
+                "procurement summary", "show seeded data", "reporting snapshot"],
+     "keywords": ["dashboard", "report"], "keyword_weight": 2},
+
     # Weighted higher than the default 3 — "why is/does/was" and "explain
     # why" are highly distinctive question phrasings with very low false-
     # positive risk, deliberately weighted to reliably win over incidental

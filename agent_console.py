@@ -45,6 +45,13 @@ import org_profile as op
 import item_tax
 import importlib
 import seed_manager as sm
+import sales_order as sales
+import billing
+import cash_application as cash
+import goods_receipt as receipts
+import vendor_onboarding as vendors
+import customer_onboarding as customers
+import purchase_bundles as bundles
 from ui_theme import apply_theme
 
 # Page configuration and the shared theme are owned by streamlit_app.py.
@@ -52,9 +59,12 @@ from ui_theme import apply_theme
 _DIR = os.path.dirname(os.path.abspath(__file__))
 
 STATIC_PROMPTS = [
+    "Show executive summary",
+    "Show sales report",
+    "Show inventory report",
+    "Show finance and receivables report",
+    "Show procurement report",
     "What needs action right now?",
-    "Switch to reorder qty based mode",
-    "I have order data to upload",
 ]
 
 
@@ -162,6 +172,12 @@ def _user_said(content):
     st.session_state.chat_history.append({"role": "user", "content": content})
 
 
+def _friendly_failure(context="that request"):
+    """Keep technical failures out of the end-user conversation."""
+    _say(f"I couldn't complete {context} just now. Your data is unchanged. "
+         "Please try again or choose one of the reporting prompts below.")
+
+
 def _notify_shell_refresh():
     """
     Sets a flag that gets rendered as a real postMessage script at the
@@ -226,6 +242,78 @@ def handle_check_at_risk():
             lines.append(f"- {r['mat_desc']} at {_lname(r['location'])} — "
                         f"need {r['recommended_qty']:g} by {r['required_by_date']}")
     _say("\n".join(lines))
+
+
+def _money(value):
+    return f"₹{float(value or 0):,.2f}"
+
+
+def handle_reporting(text):
+    """Read-only seeded-data reports with stable, presentation-ready output."""
+    lower = text.lower()
+    sales_stats = sales.stats()
+    inventory_stats = inv.stats()
+    invoice_stats = billing.stats()
+    cash_stats = cash.stats()
+    receipt_stats = receipts.stats()
+    vendor_stats = vendors.stats()
+    customer_stats = customers.stats()
+    bundle_stats = bundles.stats()
+    bom_stats = bom.stats()
+    item_count = len(po_export.load_item_master(active_only=True))
+    pr_rows = pc.get_pr_report()
+    open_prs = [r for r in pr_rows if r.get("Status") == "Open"]
+    po_count = len(pc.get_all_po_headers())
+
+    sales_lines = [
+        "### Sales report",
+        f"- **{sales_stats['total']}** sales orders worth **{_money(sales_stats['total_value'])}**",
+        f"- Confirmed order value: **{_money(sales_stats['confirmed_value'])}**",
+        f"- **{customer_stats['approved']}** active customers",
+    ]
+    inventory_lines = [
+        "### Inventory report",
+        f"- **{inventory_stats['materials_tracked']}** materials across **{inventory_stats['locations_tracked']}** locations",
+        f"- Units on hand: **{inventory_stats['total_units_on_hand']:,.0f}**",
+        f"- Units in transit: **{inventory_stats['total_units_in_transit']:,.0f}**",
+        f"- Negative balances: **{inventory_stats['negative_balances']}**",
+    ]
+    finance_lines = [
+        "### Finance & receivables",
+        f"- **{invoice_stats['total']}** invoices worth **{_money(invoice_stats['total_value'])}**",
+        f"- Cash received: **{_money(cash_stats['total_received'])}**",
+        f"- Overdue: **{cash_stats['overdue_count']}** invoices / **{_money(cash_stats['overdue_amount'])}**",
+        f"- Unapplied cash: **{_money(cash_stats['total_unapplied'])}**",
+    ]
+    procurement_lines = [
+        "### Procurement report",
+        f"- **{len(open_prs)}** open PR lines and **{po_count}** purchase orders",
+        f"- **{vendor_stats['approved']}** approved vendors",
+        f"- **{receipt_stats['by_status'].get('Posted', 0)}** posted goods receipts",
+        f"- **{bundle_stats['active_bundles']}** active purchase bundles with **{bundle_stats['total_lines']}** seeded lines",
+    ]
+
+    master_lines = [
+        "### Seeded master data",
+        f"- **{item_count}** active materials and **{vendor_stats['approved']}** approved vendors",
+        f"- **{customer_stats['approved']}** active customers",
+        f"- **{bom_stats['finished_goods']}** finished goods with **{bom_stats['bom_lines']}** BOM component lines",
+        f"- **{bundle_stats['active_bundles']}** active procurement bundles",
+    ]
+
+    if "sales" in lower:
+        lines = sales_lines
+    elif "inventory" in lower:
+        lines = inventory_lines
+    elif any(k in lower for k in ("finance", "financial", "receivable", "cash")):
+        lines = finance_lines
+    elif "procurement" in lower:
+        lines = procurement_lines
+    else:
+        lines = ["## Executive reporting snapshot"] + master_lines[1:] + [""] + \
+                sales_lines[1:] + [""] + inventory_lines[1:] + [""] + \
+                finance_lines[1:] + [""] + procurement_lines[1:]
+    _say("\n".join(lines) + "\n\n*Live from the seeded ERP dataset.*")
 
 
 def handle_explain(text):
@@ -531,42 +619,46 @@ def handle_help():
 # ── Router ────────────────────────────────────────────────────────────────
 def process_input(text):
     _user_said(text)
-    result = ai.match_intent(text)
-    intent = result["intent"]
-    if intent == "check_at_risk":
-        handle_check_at_risk()
-    elif intent == "ship_transfer":
-        handle_ship(text)
-    elif intent == "receive_transfer":
-        handle_receive(text)
-    elif intent == "create_pr":
-        handle_create_pr(text)
-    elif intent == "switch_mode":
-        handle_switch_mode(text)
-    elif intent == "upload_orders":
-        handle_upload_orders()
-    elif intent == "run_setup":
-        handle_run_setup()
-    elif intent == "complete_rest":
-        handle_complete_rest()
-    elif intent == "load_full_demo":
-        handle_load_full_demo()
-    elif intent == "add_customer_wave":
-        handle_add_customer_wave()
-    elif intent == "reset_data":
-        handle_reset_data()
-    elif intent == "query_org_profile":
-        handle_query_org_profile()
-    elif intent == "query_item_tax":
-        handle_query_item_tax(text)
-    elif intent == "explain":
-        handle_explain(text)
-    elif intent == "help":
-        handle_help()
-    else:
-        _say("I didn't catch an action I recognize in that. Try one of the "
-            "examples below, or rephrase — I look for things like \"ship X to Y\", "
-            "\"what needs action\", or \"why is X flagged\".")
+    try:
+        result = ai.match_intent(text)
+        intent = result["intent"]
+        if intent == "check_at_risk":
+            handle_check_at_risk()
+        elif intent == "reporting":
+            handle_reporting(text)
+        elif intent == "ship_transfer":
+            handle_ship(text)
+        elif intent == "receive_transfer":
+            handle_receive(text)
+        elif intent == "create_pr":
+            handle_create_pr(text)
+        elif intent == "switch_mode":
+            handle_switch_mode(text)
+        elif intent == "upload_orders":
+            handle_upload_orders()
+        elif intent == "run_setup":
+            handle_run_setup()
+        elif intent == "complete_rest":
+            handle_complete_rest()
+        elif intent == "load_full_demo":
+            handle_load_full_demo()
+        elif intent == "add_customer_wave":
+            handle_add_customer_wave()
+        elif intent == "reset_data":
+            handle_reset_data()
+        elif intent == "query_org_profile":
+            handle_query_org_profile()
+        elif intent == "query_item_tax":
+            handle_query_item_tax(text)
+        elif intent == "explain":
+            handle_explain(text)
+        elif intent == "help":
+            handle_help()
+        else:
+            _say("I couldn't match that request yet. Try a reporting prompt below, "
+                 "or ask what needs action right now.")
+    except Exception:
+        _friendly_failure("that request")
 
 
 # ── UI ────────────────────────────────────────────────────────────────────
@@ -574,10 +666,8 @@ _init_state()
 _render_pending_refresh_notify()
 
 st.markdown("## \U0001f916 Agent Console")
-st.caption("A conversational surface over the same real backend the traditional "
-          "screens use — nothing here is simulated. Pattern-matched against a "
-          "curated vocabulary, not a general-purpose language model: genuinely "
-          "unrecognized input is reported honestly, never guessed at.")
+st.caption("Ask for operational reports, investigate seeded ERP data, or propose "
+           "controlled actions. Technical errors are never exposed in the chat.")
 st.divider()
 
 for msg in st.session_state.chat_history:
@@ -649,8 +739,8 @@ if st.session_state.pending_action:
                                     "; ".join(f"{r['order_ref']}: {'; '.join(r['reasons'])}"
                                              for r in result["rejected"]))
                     _say("\n\n".join(parts) if parts else "No rows found in the uploaded file.")
-                except Exception as e:
-                    _say(f"\u274c {e}")
+                except Exception:
+                    _friendly_failure("the order upload")
                 else:
                     if result.get("accepted"):
                         _notify_shell_refresh()
@@ -682,8 +772,8 @@ if st.session_state.pending_action:
                         did_reset = True
                         _say("\u2705 Reset and reseeded. Restart the traditional "
                             "apps (or just switch tabs and back) to see fresh data.")
-                except Exception as e:
-                    _say(f"\u274c {e}")
+                except Exception:
+                    _friendly_failure("the data reset")
                 else:
                     if did_reset:
                         _notify_shell_refresh()
@@ -751,8 +841,8 @@ if st.session_state.pending_action:
                             _say(f"\u2705 New customer wave added — {names} are on "
                                 f"file with real quotations, confirmed orders, and "
                                 f"Open PRs, ready for a live PR Consolidation run.")
-                except Exception as e:
-                    _say(f"\u274c {e}")
+                except Exception:
+                    _friendly_failure("the approved action")
                 else:
                     _notify_shell_refresh()
                 st.session_state.pending_action = None
