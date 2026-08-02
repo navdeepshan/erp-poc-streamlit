@@ -24,6 +24,8 @@ THEME_CSS = """
 }
 
 [data-testid="stHeader"] { background: rgba(243, 247, 251, .82); }
+[data-testid="stToolbar"], [data-testid="stDecoration"],
+[data-testid="stStatusWidget"] { display: none !important; }
 [data-testid="stAppViewContainer"] > .main .block-container {
   max-width: 1500px;
   padding-top: 2rem;
@@ -156,6 +158,24 @@ def _hide_streamlit_cloud_manager():
             const text = (button.textContent || '').trim();
             if (label === 'Close manage app panel') button.click();
             if (text === 'Manage app') button.style.setProperty('display', 'none', 'important');
+          }
+          if (!doc.getElementById('erp-reporting-chat-launcher')) {
+            const launcher = doc.createElement('button');
+            launcher.id = 'erp-reporting-chat-launcher';
+            launcher.textContent = 'Chat';
+            launcher.setAttribute('aria-label', 'Open ERP reporting chat');
+            launcher.style.cssText = [
+              'position:fixed','right:24px','bottom:24px','z-index:2147483647',
+              'height:52px','padding:0 22px','border:0','border-radius:26px',
+              'background:#315bea','color:#fff','font:600 15px system-ui',
+              'box-shadow:0 10px 30px rgba(17,24,39,.28)','cursor:pointer'
+            ].join(';');
+            launcher.onclick = () => window.top.open(
+              window.top.location.origin + '/agent_console?chat_popup=1',
+              'erpReportingChat',
+              'popup=yes,width=520,height=760,resizable=yes,scrollbars=yes'
+            );
+            doc.body.appendChild(launcher);
           }
         } catch (_) {}
       };
