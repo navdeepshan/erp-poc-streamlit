@@ -639,6 +639,22 @@ def process_chat_query(text):
 _init_state()
 _render_pending_refresh_notify()
 
+if st.query_params.get("embedded_chat") == "1":
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] {
+          display: none !important;
+        }
+        [data-testid="stAppViewContainer"] > .main .block-container {
+          max-width: 500px !important;
+          padding: 1rem 1rem 5rem !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 st.markdown("## Reporting Assistant")
 st.caption("Ask about the seeded ERP data or choose a report below. Actions and "
            "technical logs are disabled in this workspace.")

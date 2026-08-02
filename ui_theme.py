@@ -157,6 +157,41 @@ def _hide_streamlit_cloud_manager():
             if (label === 'Close manage app panel') button.click();
             if (text === 'Manage app') button.style.setProperty('display', 'none', 'important');
           }
+          if (!doc.getElementById('erp-chat-launcher')) {
+            const launcher = doc.createElement('button');
+            launcher.id = 'erp-chat-launcher';
+            launcher.textContent = 'Chat';
+            launcher.setAttribute('aria-label', 'Open embedded ERP chat');
+            launcher.style.cssText = 'position:fixed;right:24px;bottom:24px;z-index:2147483647;height:52px;padding:0 22px;border:0;border-radius:26px;background:#315bea;color:#fff;font:600 15px system-ui;box-shadow:0 10px 30px rgba(17,24,39,.28);cursor:pointer';
+            launcher.onclick = () => {
+              let panel = doc.getElementById('erp-chat-panel');
+              if (panel) {
+                panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
+                return;
+              }
+              panel = doc.createElement('section');
+              panel.id = 'erp-chat-panel';
+              panel.setAttribute('aria-label', 'Embedded ERP Reporting Assistant');
+              panel.style.cssText = 'position:fixed;right:24px;bottom:88px;z-index:2147483646;width:min(430px,calc(100vw - 32px));height:min(680px,calc(100vh - 120px));display:flex;flex-direction:column;overflow:hidden;background:#fff;border:1px solid #d9e2ec;border-radius:18px;box-shadow:0 24px 70px rgba(17,24,39,.3)';
+              const header = doc.createElement('div');
+              header.style.cssText = 'height:54px;flex:0 0 54px;display:flex;align-items:center;justify-content:space-between;padding:0 14px 0 18px;background:#111827;color:#fff;font:600 15px system-ui';
+              header.textContent = 'Reporting Assistant';
+              const close = doc.createElement('button');
+              close.textContent = '×';
+              close.setAttribute('aria-label', 'Close embedded ERP chat');
+              close.style.cssText = 'border:0;background:transparent;color:#fff;font-size:26px;cursor:pointer;line-height:1';
+              close.onclick = () => { panel.style.display = 'none'; };
+              header.appendChild(close);
+              const frame = doc.createElement('iframe');
+              frame.title = 'Embedded ERP Chat';
+              frame.src = window.top.location.origin + '/agent_console?embedded_chat=1';
+              frame.style.cssText = 'width:100%;height:100%;border:0;background:#fff';
+              panel.appendChild(header);
+              panel.appendChild(frame);
+              doc.body.appendChild(panel);
+            };
+            doc.body.appendChild(launcher);
+          }
         } catch (_) {}
       };
       clean();
