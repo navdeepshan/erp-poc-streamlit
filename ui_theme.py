@@ -166,7 +166,7 @@ def _hide_streamlit_cloud_manager():
     </script>
     """
     if hasattr(st, "iframe"):
-        st.iframe(script, width="stretch", height=0)
+        st.iframe(script, width="stretch", height=1)
     else:
         st.components.v1.html(script, height=0)
 
