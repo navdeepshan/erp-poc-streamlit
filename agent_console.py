@@ -604,12 +604,39 @@ def process_input(text):
         _friendly_failure("that request")
 
 
+def process_chat_query(text):
+    """Route free text only to the five safe, read-only reports."""
+    query = " ".join(text.strip().lower().split())
+    if not query:
+        return
+
+    routes = (
+        (("finance", "receivable", "invoice", "cash", "overdue"),
+         "Show finance and receivables report"),
+        (("sale", "customer", "order", "revenue"), "Show sales report"),
+        (("procurement", "purchase", "vendor", "supplier", "pr", "po"),
+         "Show procurement report"),
+        (("inventory", "stock", "material", "warehouse", "balance"),
+         "Show inventory report"),
+        (("executive", "summary", "overview", "dashboard", "performance"),
+         "Show executive summary"),
+    )
+    for keywords, report_prompt in routes:
+        if any(keyword in query for keyword in keywords):
+            process_input(report_prompt)
+            return
+
+    _user_said(text)
+    _say("I can answer from the seeded ERP reports. Ask for an executive summary, "
+         "sales, inventory, finance and receivables, or procurement.")
+
+
 # ── UI ────────────────────────────────────────────────────────────────────
 _init_state()
 _render_pending_refresh_notify()
 
 st.markdown("## Reporting Assistant")
-st.caption("Choose one of the five read-only reports below. Free-text actions and "
+st.caption("Ask about the seeded ERP data or choose a report below. Actions and "
            "technical logs are disabled in this workspace.")
 st.divider()
 
@@ -803,3 +830,8 @@ for i, prompt in enumerate(example_prompts):
     if cols[i % 3].button(prompt, key=f"example_{i}", width="stretch"):
         process_input(prompt)
         st.rerun()
+
+typed = st.chat_input("Ask about sales, inventory, finance, or procurement...")
+if typed:
+    process_chat_query(typed)
+    st.rerun()
