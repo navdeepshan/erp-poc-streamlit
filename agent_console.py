@@ -623,7 +623,11 @@ def process_chat_query(text):
     )
     for keywords, report_prompt in routes:
         if any(keyword in query for keyword in keywords):
-            process_input(report_prompt)
+            _user_said(text)
+            try:
+                handle_reporting(report_prompt)
+            except Exception:
+                _friendly_failure("that report")
             return
 
     _user_said(text)
