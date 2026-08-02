@@ -608,9 +608,9 @@ def process_input(text):
 _init_state()
 _render_pending_refresh_notify()
 
-st.markdown("## \U0001f916 Agent Console")
-st.caption("Ask for operational reports, investigate seeded ERP data, or propose "
-           "controlled actions. Technical errors are never exposed in the chat.")
+st.markdown("## Reporting Assistant")
+st.caption("Choose one of the five read-only reports below. Free-text actions and "
+           "technical logs are disabled in this workspace.")
 st.divider()
 
 for msg in st.session_state.chat_history:
@@ -796,15 +796,10 @@ if st.session_state.pending_action:
                 st.rerun()
 
 st.divider()
-st.markdown("###### Try one of these, or type your own:")
+st.markdown("###### Choose a report")
 example_prompts = build_example_prompts()
 cols = st.columns(3)
 for i, prompt in enumerate(example_prompts):
     if cols[i % 3].button(prompt, key=f"example_{i}", width="stretch"):
         process_input(prompt)
         st.rerun()
-
-typed = st.chat_input("Or type your own request...")
-if typed:
-    process_input(typed)
-    st.rerun()
