@@ -140,6 +140,35 @@ hr { border-color: var(--erp-line) !important; }
 def apply_theme():
     """Inject the shared app styling after ``st.set_page_config``."""
     st.markdown(THEME_CSS, unsafe_allow_html=True)
+    _hide_streamlit_cloud_manager()
+
+
+def _hide_streamlit_cloud_manager():
+    """Hide Community Cloud's owner management drawer from the product UI."""
+    script = """
+    <script>
+    (() => {
+      const clean = () => {
+        try {
+          const doc = window.top.document;
+          for (const button of doc.querySelectorAll('button')) {
+            const label = (button.getAttribute('aria-label') || '').trim();
+            const text = (button.textContent || '').trim();
+            if (label === 'Close manage app panel') button.click();
+            if (text === 'Manage app') button.style.setProperty('display', 'none', 'important');
+          }
+        } catch (_) {}
+      };
+      clean();
+      const timer = setInterval(clean, 500);
+      setTimeout(() => clearInterval(timer), 30000);
+    })();
+    </script>
+    """
+    if hasattr(st, "iframe"):
+        st.iframe(script, width="stretch", height=0)
+    else:
+        st.components.v1.html(script, height=0)
 
 
 def embed_html(content, *, height, scrolling=False):
