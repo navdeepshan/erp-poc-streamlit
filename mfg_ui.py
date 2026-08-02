@@ -58,7 +58,7 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 with st.sidebar:
     st.markdown('<div class="erp-section-label">MANUFACTURING</div>', unsafe_allow_html=True)
     st.divider()
-    page = st.radio("", ["\U0001f4e5  Goods Receipt",
+    page = st.radio("Manufacturing section", ["\U0001f4e5  Goods Receipt",
                          "\U0001f50e  Quality Inspection",
                          "\U0001f9e9  BOM & Explosion",
                          "\U0001f3ed  Production",
@@ -187,10 +187,10 @@ def page_goods_receipt():
                     except Exception:
                         st.warning("\u26a0\ufe0f Goods receipt recorded, but the accounting "
                                   "entry failed to post:")
-                        st.code(traceback.format_exc())
+                        st.caption("Technical details hidden.")
                 except Exception:
                     st.error("\u274c Error creating goods receipt:")
-                    st.code(traceback.format_exc())
+                    st.caption("Technical details hidden.")
 
     # ── TAB 2 — view and manage existing GRs ──────────────────────────────────────
     with tab2:
@@ -200,7 +200,7 @@ def page_goods_receipt():
         else:
             gdf = pd.DataFrame(grs)[["gr_id","po_number","vendor_name","status","gr_date"]]
             gdf.columns = ["GR","PO","Vendor","Status","Date"]
-            st.dataframe(gdf, use_container_width=True, hide_index=True)
+            st.dataframe(gdf, width="stretch", hide_index=True)
 
             labels = {g["gr_id"]: f"{g['gr_id']} — {g['po_number']} ({g['status']})" for g in grs}
             sel = st.selectbox("Work on", list(labels.keys()), format_func=lambda k: labels[k], key="gr_work_sel")
@@ -212,7 +212,7 @@ def page_goods_receipt():
                 st.markdown("##### \U0001f4c4 Line Items")
                 idf = pd.DataFrame(items)[["mat_code","mat_desc","uom","po_qty","qty_received"]]
                 idf.columns = ["Code","Description","UOM","PO Qty","Received"]
-                st.dataframe(idf, use_container_width=True, hide_index=True)
+                st.dataframe(idf, width="stretch", hide_index=True)
                 st.caption(f"Vendor: {g['vendor_name']}  \u00b7  Received by: {g['received_by'] or 'n/a'}")
 
             with right:
@@ -377,7 +377,7 @@ def page_quality_inspection():
             lines = qi.get_gr_quality_status(sel)
             ldf = pd.DataFrame(lines)[["mat_code","mat_desc","qty_received","qty_passed","qty_failed","status"]]
             ldf.columns = ["Code","Description","Received","Passed","Failed","Status"]
-            st.dataframe(ldf, use_container_width=True, hide_index=True)
+            st.dataframe(ldf, width="stretch", hide_index=True)
 
             gen_clicked = st.button("\U0001f4c4 Generate Inspection Report", key="qi_gen_doc")
             if gen_clicked:
@@ -495,7 +495,7 @@ def page_bom():
             if lines:
                 ldf = pd.DataFrame(lines)[["mat_code","mat_desc","gross_qty","on_hand_qty","open_po_qty","net_qty"]]
                 ldf.columns = ["Code","Description","Gross Qty","On Hand","Open PO Qty","Net to Requisition"]
-                st.dataframe(ldf, use_container_width=True, hide_index=True)
+                st.dataframe(ldf, width="stretch", hide_index=True)
             else:
                 st.success("\u2705 Nothing to requisition — fully covered by on-hand stock and open POs.")
 
@@ -523,7 +523,7 @@ def page_bom():
                               "Head to Consolidate on the S2P app to route them.")
                 except Exception:
                     st.error("\u274c Error proposing PR:")
-                    st.code(traceback.format_exc())
+                    st.caption("Technical details hidden.")
 
     # ── TAB 2 — view a BOM tree ───────────────────────────────────────────────────
     with tab2:
@@ -537,7 +537,7 @@ def page_bom():
             children = bom.get_bom(sel)
             cdf = pd.DataFrame(children)[["component_code","component_desc","qty_per","uom"]]
             cdf.columns = ["Component","Description","Qty Per Unit","UOM"]
-            st.dataframe(cdf, use_container_width=True, hide_index=True)
+            st.dataframe(cdf, width="stretch", hide_index=True)
             st.caption("Direct children only — components with their own BOM (sub-assemblies) "
                       "can be selected above too, to drill into their own components.")
 
@@ -798,7 +798,7 @@ def page_inventory():
                 } for t in in_transit])
                 bdf = pd.concat([bdf, tdf], ignore_index=True)
             st.dataframe(bdf[["Code","Description","Location","Balance","Status"]],
-                        use_container_width=True, hide_index=True)
+                        width="stretch", hide_index=True)
 
             gen_clicked = st.button("\U0001f4c4 Generate Stock Report", key="inv_gen_doc")
             if gen_clicked:
@@ -833,7 +833,7 @@ def page_inventory():
                     ldf = pd.concat([ldf, pd.DataFrame([{
                         "Location": f"{dest} (In Transit)", "Balance": t["quantity"]}])],
                         ignore_index=True)
-            st.dataframe(ldf, use_container_width=True, hide_index=True)
+            st.dataframe(ldf, width="stretch", hide_index=True)
             c1, c2 = st.columns(2)
             c1.metric("Total on hand across all locations", f"{sum(b['balance'] for b in by_loc):g}")
             transit_total = sum(t["quantity"] for t in sel_in_transit)
@@ -850,7 +850,7 @@ def page_inventory():
             tdf = pd.DataFrame(txns)[["txn_id","txn_date","mat_code","location_name",
                                        "quantity","txn_type","reference_id"]]
             tdf.columns = ["Txn","Date","Material","Location","Qty","Type","Reference"]
-            st.dataframe(tdf, use_container_width=True, hide_index=True)
+            st.dataframe(tdf, width="stretch", hide_index=True)
 
     # ── TAB 4 — persistent demand vs. supply position + transfer suggestions ──────
     with tab4:
@@ -884,7 +884,7 @@ def page_inventory():
                                           "on_hand","open_po","net_position"]]
             pdf["location_id"] = pdf["location_id"].map(_lname)
             pdf.columns = ["Code","Description","Location","Demand","On Hand","Open PO","Net Position"]
-            st.dataframe(pdf, use_container_width=True, hide_index=True)
+            st.dataframe(pdf, width="stretch", hide_index=True)
 
             st.divider()
             st.markdown("##### \U0001f504 Cross-location transfer opportunities")
@@ -901,7 +901,7 @@ def page_inventory():
                 tdf["from_location"] = tdf["from_location"].map(_lname)
                 tdf["to_location"] = tdf["to_location"].map(_lname)
                 tdf.columns = ["Code","Description","From","To","Suggested Qty","Shortage at Destination"]
-                st.dataframe(tdf, use_container_width=True, hide_index=True)
+                st.dataframe(tdf, width="stretch", hide_index=True)
 
                 st.markdown("###### Ship")
                 st.caption("Ships real stock — the source location's balance drops "
@@ -1118,7 +1118,7 @@ def page_inventory():
                 idf["location"] = idf["location"].map(_lname)
                 idf.columns = ["PR", "Material", "Location", "Required By", "Implied Arrival",
                               "Shortfall (days)"]
-                st.dataframe(idf, use_container_width=True, hide_index=True)
+                st.dataframe(idf, width="stretch", hide_index=True)
                 st.divider()
 
             if analysis["duplicates"]:
@@ -1156,7 +1156,7 @@ def page_inventory():
             if existing:
                 edf = pd.DataFrame(existing)
                 edf.columns = ["Material", "Location", "Min", "Max", "Cadence (days)"]
-                st.dataframe(edf, use_container_width=True, hide_index=True)
+                st.dataframe(edf, width="stretch", hide_index=True)
             st.divider()
 
         recs = bom.get_procurement_recommendations()
@@ -1182,7 +1182,7 @@ def page_inventory():
             ardf["location"] = ardf["location"].map(_lname)
             ardf.columns = ["Material", "Location", "Gap", "Stock-Out Date",
                             "Days Left", "Normal Lead Time (days)"]
-            st.dataframe(ardf, use_container_width=True, hide_index=True)
+            st.dataframe(ardf, width="stretch", hide_index=True)
             st.divider()
 
         if action_needed:
@@ -1221,7 +1221,7 @@ def page_inventory():
                                          "covering_pr", "stockout_date"]]
             cdf.columns = ["Material", "Location", "Gap", "Covering PR", "Needed By"]
             cdf["Location"] = cdf["Location"].map(_lname)
-            st.dataframe(cdf, use_container_width=True, hide_index=True)
+            st.dataframe(cdf, width="stretch", hide_index=True)
             st.divider()
 
         if not recs:
@@ -1234,9 +1234,11 @@ def page_inventory():
         if not all_positions:
             st.info("No confirmed demand inside the planning horizon yet \u2014 nothing to project.")
         else:
-            labels = {i: f"{p['mat_code']} \u2014 {_lname(p['location'])}"
-                     f"{' \u26a0\ufe0f stock-out ' + p['stockout_date'] if p['stockout_date'] else ' \u2705 covered'}"
-                     for i, p in enumerate(all_positions)}
+            labels = {}
+            for i, p in enumerate(all_positions):
+                status_text = (f" \u26a0\ufe0f stock-out {p['stockout_date']}"
+                               if p["stockout_date"] else " \u2705 covered")
+                labels[i] = f"{p['mat_code']} \u2014 {_lname(p['location'])}{status_text}"
             sel = st.selectbox("Material + location", list(labels.keys()),
                 format_func=lambda k: labels[k], key="tp_drill_sel")
             proj = all_positions[sel]
@@ -1249,7 +1251,7 @@ def page_inventory():
             with st.expander("Event-by-event detail"):
                 edf = pd.DataFrame(proj["trajectory"])
                 edf.columns = ["Date", "Balance", "Event"]
-                st.dataframe(edf, use_container_width=True, hide_index=True)
+                st.dataframe(edf, width="stretch", hide_index=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1304,7 +1306,7 @@ def page_production():
                 st.markdown(f"##### Component impact — {len(preview)} line(s)")
                 pdf = pd.DataFrame(preview)[["mat_code","mat_desc","gross_qty","on_hand_qty","after_qty"]]
                 pdf.columns = ["Code","Description","Need","On Hand","After Build"]
-                st.dataframe(pdf, use_container_width=True, hide_index=True)
+                st.dataframe(pdf, width="stretch", hide_index=True)
                 if shortages:
                     st.warning(f"\u26a0\ufe0f {len(shortages)} component(s) will go negative — "
                               "not enough on hand. Confirming will still record it honestly; "
@@ -1327,7 +1329,7 @@ def page_production():
                     st.rerun()
                 except Exception:
                     st.error("\u274c Error confirming production:")
-                    st.code(traceback.format_exc())
+                    st.caption("Technical details hidden.")
 
     # ── TAB 2 — history ───────────────────────────────────────────────────────────
     with tab2:
@@ -1338,7 +1340,7 @@ def page_production():
             cdf = pd.DataFrame(confs)[["confirmation_id","parent_code","quantity",
                                        "location_id","confirmation_date","confirmed_by"]]
             cdf.columns = ["Confirmation","Item","Qty Built","Location","Date","Confirmed By"]
-            st.dataframe(cdf, use_container_width=True, hide_index=True)
+            st.dataframe(cdf, width="stretch", hide_index=True)
 
             labels = {c["confirmation_id"]: f"{c['confirmation_id']} — {c['quantity']:g} x {c['parent_code']}"
                       for c in confs}
@@ -1346,7 +1348,7 @@ def page_production():
             detail = prod.get_confirmation_detail(sel)
             ddf = pd.DataFrame(detail)[["mat_code","mat_desc","quantity","txn_type"]]
             ddf.columns = ["Code","Description","Qty (signed)","Movement"]
-            st.dataframe(ddf, use_container_width=True, hide_index=True)
+            st.dataframe(ddf, width="stretch", hide_index=True)
 
             gen_clicked = st.button("\U0001f4c4 Generate Production Slip", key="prod_gen_doc")
             if gen_clicked:

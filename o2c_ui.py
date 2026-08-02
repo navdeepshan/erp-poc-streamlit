@@ -106,7 +106,7 @@ def item_picker(key_prefix):
                               key=f"{key_prefix}_q", label_visibility="collapsed")
     with c2:
         search_clicked = st.button("\U0001f50d Search", key=f"{key_prefix}_search",
-                                   use_container_width=True)
+                                   width="stretch")
 
     if search_clicked and len(query) >= 2:
         st.session_state[f"{key_prefix}_results"] = po_export.fuzzy_search(query, items, max_results=15)
@@ -135,7 +135,7 @@ def item_picker(key_prefix):
 with st.sidebar:
     st.markdown('<div class="erp-section-label">ORDER TO CASH</div>', unsafe_allow_html=True)
     st.divider()
-    page = st.radio("", ["\U0001f465  Customer Onboarding",
+    page = st.radio("Order-to-Cash section", ["\U0001f465  Customer Onboarding",
                          "\U0001f4b0  Quotation",
                          "\U0001f4e6  Sales Orders",
                          "\U0001f69a  Fulfillment",
@@ -173,7 +173,7 @@ def page_customer_onboarding():
         show_cols = ["Customer_ID", "Customer_Name", "Customer_Type", "City", "GSTIN",
                      "Credit_Limit", "Credit_Status", "Active", "Onboarding_Status"]
         show_cols = [c for c in show_cols if c in cdf.columns]
-        st.dataframe(cdf[show_cols], use_container_width=True, hide_index=True)
+        st.dataframe(cdf[show_cols], width="stretch", hide_index=True)
 
         pending = [c for c in customers if c.get("Onboarding_Status") == "Format Verified"]
         if pending:
@@ -240,7 +240,7 @@ def page_customer_onboarding():
             min_value=0, step=10000, key="co_credit")
 
     st.markdown("")
-    if st.button("\u2705  Validate & Save Customer", type="primary", use_container_width=True, key="co_save"):
+    if st.button("\u2705  Validate & Save Customer", type="primary", width="stretch", key="co_save"):
         if not cid or not cname:
             st.error("Customer ID and Customer Name are required.")
         else:
@@ -263,7 +263,7 @@ def page_customer_onboarding():
                               "flagged field(s) above and save again.")
             except Exception:
                 st.error("\u274c Error saving customer:")
-                st.code(traceback.format_exc())
+                st.caption("Technical details hidden.")
 
     if customers:
         st.divider()
@@ -288,7 +288,7 @@ def page_customer_onboarding():
         docs = co.get_documents()
         if docs:
             with st.expander(f"\U0001f4c1 {len(docs)} document(s) logged"):
-                st.dataframe(pd.DataFrame(docs), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(docs), width="stretch", hide_index=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -369,7 +369,7 @@ def page_quotation():
 
                 st.markdown("")
                 create_clicked = st.button("\U0001f4b0  Create Quote", type="primary",
-                                           use_container_width=True, key="qt_create")
+                                           width="stretch", key="qt_create")
                 if create_clicked:
                     try:
                         line_items = [{"mat_code": ln["code"], "mat_desc": ln["desc"],
@@ -384,7 +384,7 @@ def page_quotation():
                                   "Head to **Manage Quotes** to generate the document.")
                     except Exception:
                         st.error("\u274c Error creating quote:")
-                        st.code(traceback.format_exc())
+                        st.caption("Technical details hidden.")
 
     # ── TAB 2 — generate, send, and record the outcome ───────────────────────────
     with tab2:
@@ -395,7 +395,7 @@ def page_quotation():
             qdf = pd.DataFrame(quotes)[["quote_id","customer_name","status","total_value",
                                          "quote_date","valid_until"]]
             qdf.columns = ["Quote","Customer","Status","Total","Date","Valid Until"]
-            st.dataframe(qdf, use_container_width=True, hide_index=True)
+            st.dataframe(qdf, width="stretch", hide_index=True)
 
             labels = {q["quote_id"]: f"{q['quote_id']} — {q['customer_name']} ({q['status']})" for q in quotes}
             sel = st.selectbox("Work on", list(labels.keys()), format_func=lambda k: labels[k], key="qt_work_sel")
@@ -407,7 +407,7 @@ def page_quotation():
                 st.markdown("##### \U0001f4c4 Line Items")
                 idf = pd.DataFrame(items)[["mat_code","mat_desc","uom","qty","unit_price","line_total"]]
                 idf.columns = ["Code","Description","UOM","Qty","Price","Line Total"]
-                st.dataframe(idf, use_container_width=True, hide_index=True)
+                st.dataframe(idf, width="stretch", hide_index=True)
                 st.caption(f"Total: \u20b9{quote['total_value']:,.2f}  \u00b7  "
                           f"Valid until {quote['valid_until']}  \u00b7  {quote['payment_terms']}")
 
@@ -520,7 +520,7 @@ def page_sales_orders():
                                   f"{result['credit_reason']}")
                 except Exception:
                     st.error("\u274c Error creating order:")
-                    st.code(traceback.format_exc())
+                    st.caption("Technical details hidden.")
 
         st.divider()
         st.markdown("#### \u26a1 Direct Order Entry")
@@ -589,7 +589,7 @@ def page_sales_orders():
                                       f"{result['credit_reason']}")
                     except Exception:
                         st.error("\u274c Error creating order:")
-                        st.code(traceback.format_exc())
+                        st.caption("Technical details hidden.")
 
     # ── TAB 2 — manage existing orders ────────────────────────────────────────────
     with tab2:
@@ -600,7 +600,7 @@ def page_sales_orders():
             odf = pd.DataFrame(orders)[["so_id","customer_name","status","total_value",
                                          "order_date","source_quote"]]
             odf.columns = ["Order","Customer","Status","Total","Date","Source Quote"]
-            st.dataframe(odf, use_container_width=True, hide_index=True)
+            st.dataframe(odf, width="stretch", hide_index=True)
 
             labels = {o["so_id"]: f"{o['so_id']} — {o['customer_name']} ({o['status']})" for o in orders}
             sel = st.selectbox("Work on", list(labels.keys()), format_func=lambda k: labels[k], key="so_work_sel")
@@ -612,7 +612,7 @@ def page_sales_orders():
                 st.markdown("##### \U0001f4c4 Line Items")
                 idf = pd.DataFrame(items)[["mat_code","mat_desc","uom","qty","unit_price","line_total"]]
                 idf.columns = ["Code","Description","UOM","Qty","Price","Line Total"]
-                st.dataframe(idf, use_container_width=True, hide_index=True)
+                st.dataframe(idf, width="stretch", hide_index=True)
                 st.caption(f"Total: \u20b9{order['total_value']:,.2f}  \u00b7  "
                           f"{order['payment_terms']}  \u00b7  Delivery: {_loc_display(order['delivery_location']) or 'TBD'}")
 
@@ -684,7 +684,7 @@ def page_sales_orders():
                     st.success(f"\u2705 {len(result['accepted'])} order(s) created.")
                     adf = pd.DataFrame(result["accepted"])
                     adf.columns = ["Order Reference", "Sales Order", "Status"]
-                    st.dataframe(adf, use_container_width=True, hide_index=True)
+                    st.dataframe(adf, width="stretch", hide_index=True)
                 if result["rejected"]:
                     st.error(f"\u274c {len(result['rejected'])} order(s) rejected.")
                     for r in result["rejected"]:
@@ -733,7 +733,7 @@ def page_fulfillment():
             items = so.get_order_items(sel_so)
             idf = pd.DataFrame(items)[["mat_code","mat_desc","uom","qty"]]
             idf.columns = ["Code","Description","UOM","Qty"]
-            st.dataframe(idf, use_container_width=True, hide_index=True)
+            st.dataframe(idf, width="stretch", hide_index=True)
             st.caption(f"Deliver to: {_loc_display(order['delivery_location']) or 'not specified'}")
 
             create_clicked = st.button("\U0001f69a Create Fulfillment", type="primary", key="ful_create")
@@ -745,7 +745,7 @@ def page_fulfillment():
                               "Head to **Manage Fulfillments** to pick and ship.")
                 except Exception:
                     st.error("\u274c Error creating fulfillment:")
-                    st.code(traceback.format_exc())
+                    st.caption("Technical details hidden.")
 
     # ── TAB 2 — pick, ship, deliver, or cancel ────────────────────────────────────
     with tab2:
@@ -756,7 +756,7 @@ def page_fulfillment():
             fdf = pd.DataFrame(fulfillments)[["fulfillment_id","so_id","customer_name","status",
                                                "shipped_date","delivered_date"]]
             fdf.columns = ["Fulfillment","Order","Customer","Status","Shipped","Delivered"]
-            st.dataframe(fdf, use_container_width=True, hide_index=True)
+            st.dataframe(fdf, width="stretch", hide_index=True)
 
             labels = {f["fulfillment_id"]: f"{f['fulfillment_id']} — {f['customer_name']} ({f['status']})"
                       for f in fulfillments}
@@ -781,7 +781,7 @@ def page_fulfillment():
                 else:
                     idf = pd.DataFrame(items)[["mat_code","mat_desc","uom","qty_ordered","qty_shipped"]]
                     idf.columns = ["Code","Description","UOM","Ordered","Shipped"]
-                    st.dataframe(idf, use_container_width=True, hide_index=True)
+                    st.dataframe(idf, width="stretch", hide_index=True)
 
             with right:
                 st.markdown("##### \u2696\ufe0f Actions")
@@ -819,7 +819,7 @@ def page_fulfillment():
                             st.rerun()
                         except Exception:
                             st.error("\u274c Error recording shipment:")
-                            st.code(traceback.format_exc())
+                            st.caption("Technical details hidden.")
 
                 elif f["status"] == "Shipped":
                     pod = st.text_input("Proof of delivery reference", key=f"ful_pod_{sel}")
@@ -835,7 +835,7 @@ def page_fulfillment():
                         except Exception:
                             st.warning("\u26a0\ufe0f Delivery recorded, but the accounting "
                                       "entry failed to post:")
-                            st.code(traceback.format_exc())
+                            st.caption("Technical details hidden.")
                         st.rerun()
 
                 elif f["status"] == "Delivered":
@@ -917,7 +917,7 @@ def page_settings():
                     st.warning("\u26a0\ufe0f Saved, but GSTIN still isn't valid — invoicing stays blocked.")
             except Exception:
                 st.error("\u274c Error saving profile:")
-                st.code(traceback.format_exc())
+                st.caption("Technical details hidden.")
 
         st.divider()
         st.markdown("##### \U0001f4e6 Demand Detection Mode")
@@ -996,7 +996,7 @@ def page_settings():
                 result = sm.validate_seed_file(tmp_path)
             except Exception:
                 st.error("\u274c Couldn't read this file:")
-                st.code(traceback.format_exc())
+                st.caption("Technical details hidden.")
                 result = None
 
             if result and not result["valid"]:
@@ -1045,7 +1045,7 @@ def page_settings():
                     except Exception:
                         st.error("\u274c Reset failed — nothing may have been fully applied. "
                                  "Restore from a backup if needed:")
-                        st.code(traceback.format_exc())
+                        st.caption("Technical details hidden.")
             try:
                 os.remove(tmp_path)
             except OSError:
@@ -1101,7 +1101,7 @@ def page_settings():
                     except Exception:
                         st.error("\u274c Failed partway through — the database is likely in a "
                                  "mixed state now. Reset and try again:")
-                        st.code(traceback.format_exc())
+                        st.caption("Technical details hidden.")
 
             elif so_count > 0 and fulfillment_count > 0:
                 # The new customer wave is deliberately a separate,
@@ -1144,7 +1144,7 @@ def page_settings():
                                       f"PRs ready for a live PR Consolidation run.")
                         except Exception:
                             st.error("\u274c Failed partway through:")
-                            st.code(traceback.format_exc())
+                            st.caption("Technical details hidden.")
                 else:
                     st.info("\u2705 This story has already run all the way through "
                            "(fulfillment/billing/cash application are on file)"
@@ -1169,7 +1169,7 @@ def page_settings():
                                       "imbalance and execute the transfers live.")
                         except Exception:
                             st.error("\u274c Setup failed:")
-                            st.code(traceback.format_exc())
+                            st.caption("Technical details hidden.")
                 with c2:
                     st.markdown("**For a quick full preview**")
                     st.caption("Runs the whole story in one click, including the "
@@ -1190,7 +1190,7 @@ def page_settings():
                             st.error("\u274c Demo scenario failed partway through — the "
                                      "database is likely in a mixed state now. Reset and "
                                      "try again:")
-                            st.code(traceback.format_exc())
+                            st.caption("Technical details hidden.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1231,7 +1231,7 @@ def page_billing():
             items = ful.get_fulfillment_items(sel_f)
             idf = pd.DataFrame(items)[["mat_code","mat_desc","uom","qty_shipped"]]
             idf.columns = ["Code","Description","UOM","Qty Shipped"]
-            st.dataframe(idf, use_container_width=True, hide_index=True)
+            st.dataframe(idf, width="stretch", hide_index=True)
 
             due_days = st.number_input("Payment due in (days)", min_value=1, value=30, key="bl_due")
             notes = st.text_input("Notes", key="bl_notes")
@@ -1246,7 +1246,7 @@ def page_billing():
                               f"place of supply: {result['place_of_supply']}).")
                 except Exception:
                     st.error("\u274c Error creating invoice:")
-                    st.code(traceback.format_exc())
+                    st.caption("Technical details hidden.")
 
     # ── TAB 2 — manage invoices ────────────────────────────────────────────────────
     with tab2:
@@ -1257,7 +1257,7 @@ def page_billing():
             idf = pd.DataFrame(invoices)[["invoice_id","customer_name","status","grand_total",
                                            "invoice_date","due_date"]]
             idf.columns = ["Invoice","Customer","Status","Grand Total","Date","Due"]
-            st.dataframe(idf, use_container_width=True, hide_index=True)
+            st.dataframe(idf, width="stretch", hide_index=True)
 
             labels = {i["invoice_id"]: f"{i['invoice_id']} — {i['customer_name']} ({i['status']})"
                       for i in invoices}
@@ -1271,7 +1271,7 @@ def page_billing():
                 ldf = pd.DataFrame(items)[["mat_code","hsn_code","qty","unit_price",
                                             "taxable_value","gst_rate","line_total"]]
                 ldf.columns = ["Code","HSN","Qty","Rate","Taxable","GST%","Total"]
-                st.dataframe(ldf, use_container_width=True, hide_index=True)
+                st.dataframe(ldf, width="stretch", hide_index=True)
                 st.caption(f"Subtotal \u20b9{inv['subtotal']:,.2f}  \u00b7  "
                           f"CGST \u20b9{inv['cgst_total']:,.2f}  \u00b7  "
                           f"SGST \u20b9{inv['sgst_total']:,.2f}  \u00b7  "
@@ -1301,7 +1301,7 @@ def page_billing():
                         except Exception:
                             st.warning("\u26a0\ufe0f Invoice issued, but the accounting "
                                       "entry failed to post:")
-                            st.code(traceback.format_exc())
+                            st.caption("Technical details hidden.")
                         st.rerun()
                 elif inv["status"] == "Issued":
                     st.success("\u2705 Issued — ready for payment once Cash Application exists.")
@@ -1352,14 +1352,14 @@ def page_accounting():
             edf = pd.DataFrame(entries)[["je_id","entry_date","source_type","source_id",
                                           "description","total_debit"]]
             edf.columns = ["JE","Date","Source Type","Source ID","Description","Amount"]
-            st.dataframe(edf, use_container_width=True, hide_index=True)
+            st.dataframe(edf, width="stretch", hide_index=True)
 
             labels = {je["je_id"]: f"{je['je_id']} — {je['description']}" for je in entries}
             sel = st.selectbox("View entry", list(labels.keys()), format_func=lambda k: labels[k], key="acct_sel")
             lines = acct.get_journal_entry_lines(sel)
             ldf = pd.DataFrame(lines)[["account_code","account_name","debit","credit","description"]]
             ldf.columns = ["Code","Account","Debit","Credit","Description"]
-            st.dataframe(ldf, use_container_width=True, hide_index=True)
+            st.dataframe(ldf, width="stretch", hide_index=True)
 
             gen_clicked = st.button("\U0001f4c4 Generate Journal Voucher", key="acct_gen_doc")
             if gen_clicked:
@@ -1377,7 +1377,7 @@ def page_accounting():
         tdf = pd.DataFrame(tb)[["account_code","account_name","account_type",
                                  "total_debit","total_credit","balance"]]
         tdf.columns = ["Code","Account","Type","Total Debit","Total Credit","Balance"]
-        st.dataframe(tdf, use_container_width=True, hide_index=True)
+        st.dataframe(tdf, width="stretch", hide_index=True)
 
         total_debit = sum(a["total_debit"] for a in tb)
         total_credit = sum(a["total_credit"] for a in tb)
@@ -1417,7 +1417,7 @@ def page_accounting():
                     st.rerun()
                 except Exception:
                     st.error("\u274c Error adding account:")
-                    st.code(traceback.format_exc())
+                    st.caption("Technical details hidden.")
 
     # ── TAB 3 — vendor invoices ──────────────────────────────────────────────────
     with tab3:
@@ -1445,7 +1445,7 @@ def page_accounting():
                       "invoice_date", "amount", "paid_amount", "balance_due", "status"]]
             idf.columns = ["Invoice", "GR", "PO", "Vendor", "Vendor Ref", "Date",
                           "Amount", "Paid", "Due", "Status"]
-            st.dataframe(idf, use_container_width=True, hide_index=True)
+            st.dataframe(idf, width="stretch", hide_index=True)
 
             st.divider()
             st.markdown("##### \U0001f4b8 Record a Payment")
@@ -1466,7 +1466,7 @@ def page_accounting():
                         st.success(f"\u2705 {result['payment_id']} recorded, posted as {result['je_id']}.")
                         st.rerun()
                     except Exception:
-                        st.error("\u274c Error:"); st.code(traceback.format_exc())
+                        st.error("\u274c Error:"); st.caption("Technical details hidden.")
             else:
                 st.success("\u2705 Nothing outstanding.")
 
@@ -1523,7 +1523,7 @@ def page_cash_application():
                                   f"{labels[sel_cust]}. Head to **Apply Payments** to match it.")
                     except Exception:
                         st.error("\u274c Error recording payment:")
-                        st.code(traceback.format_exc())
+                        st.caption("Technical details hidden.")
 
     # ── TAB 2 — apply payments to invoices, or recognize as advance ─────────────────
     with tab2:
@@ -1542,7 +1542,7 @@ def page_cash_application():
                 st.markdown("##### Apply to an invoice")
                 idf = pd.DataFrame(open_invoices)[["invoice_id","grand_total","paid_amount","balance_due"]]
                 idf.columns = ["Invoice","Total","Paid So Far","Balance Due"]
-                st.dataframe(idf, use_container_width=True, hide_index=True)
+                st.dataframe(idf, width="stretch", hide_index=True)
 
                 inv_labels = {i["invoice_id"]: f"{i['invoice_id']} — balance \u20b9{i['balance_due']:,.2f}"
                              for i in open_invoices}
@@ -1567,7 +1567,7 @@ def page_cash_application():
                         st.rerun()
                     except Exception:
                         st.error("\u274c Error applying payment:")
-                        st.code(traceback.format_exc())
+                        st.caption("Technical details hidden.")
             else:
                 st.caption("This customer has no open invoices to apply against.")
 
@@ -1584,7 +1584,7 @@ def page_cash_application():
                     st.rerun()
                 except Exception:
                     st.error("\u274c Error recording advance:")
-                    st.code(traceback.format_exc())
+                    st.caption("Technical details hidden.")
 
     # ── TAB 3 — manage payments + collections worklist ───────────────────────────
     with tab3:
@@ -1594,7 +1594,7 @@ def page_cash_application():
             pdf = pd.DataFrame(payments)[["payment_id","customer_name","amount",
                                            "unapplied_amount","payment_date","reference_no"]]
             pdf.columns = ["Payment","Customer","Amount","Unapplied","Date","Reference"]
-            st.dataframe(pdf, use_container_width=True, hide_index=True)
+            st.dataframe(pdf, width="stretch", hide_index=True)
 
             labels = {p["payment_id"]: f"{p['payment_id']} — {p['customer_name']}" for p in payments}
             sel = st.selectbox("View payment", list(labels.keys()), format_func=lambda k: labels[k], key="ca_view_sel")
@@ -1602,7 +1602,7 @@ def page_cash_application():
             if apps:
                 adf = pd.DataFrame(apps)[["invoice_id","applied_amount","short_payment_reason","application_date"]]
                 adf.columns = ["Applied To","Amount","Reason","Date"]
-                st.dataframe(adf, use_container_width=True, hide_index=True)
+                st.dataframe(adf, width="stretch", hide_index=True)
 
             gen_clicked = st.button("\U0001f4c4 Generate Payment Receipt", key="ca_gen_doc")
             if gen_clicked:
@@ -1621,7 +1621,7 @@ def page_cash_application():
         if overdue:
             odf = pd.DataFrame(overdue)[["invoice_id","customer_name","due_date","balance_due"]]
             odf.columns = ["Invoice","Customer","Due Date","Balance Due"]
-            st.dataframe(odf, use_container_width=True, hide_index=True)
+            st.dataframe(odf, width="stretch", hide_index=True)
         else:
             st.success("\u2705 Nothing overdue right now.")
 

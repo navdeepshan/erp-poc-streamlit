@@ -60,6 +60,6 @@ with st.container(border=True):
         st.markdown("#### Ask, review, approve")
         st.write("Use the conversational workspace to investigate inventory, upload orders, and approve proposed actions with a human in control.")
     with action:
-        st.page_link("agent_console.py", label="Open AI workspace", icon=":material/auto_awesome:", use_container_width=True)
+        st.page_link("agent_console.py", label="Open AI workspace", icon=":material/auto_awesome:", width="stretch")
 
 st.info("This is a demonstration environment. Hosted data changes may reset when the app restarts.", icon=":material/info:")
