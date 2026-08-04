@@ -193,6 +193,22 @@ def record_shipment(fulfillment_id, line_qty_shipped, carrier="", tracking_ref="
     keeps its previous Qty_Shipped (defaults to 0). Allows genuine partial
     shipment — a line shipped less than ordered just shows that plainly,
     no inventory system required to know it happened.
+
+    Posts a real Goods Issue against inventory.py's own ledger for each
+    shipped line, at this fulfillment's own delivery_location (a real,
+    tracked location in both pilots — the Plant or regional office stock
+    genuinely ships from, not a raw customer address) — a real, found
+    gap until now: outbound fulfillment shipments never touched the
+    inventory ledger at all, so stock that had genuinely left the
+    building and been delivered to a real customer still showed as
+    on-hand. Same "record what happened, don't gatekeep it" principle
+    already used throughout inventory.py (GR allows over-receipt, this
+    allows a resulting negative balance too) — the shipment already
+    physically happened by the time this runs; refusing to record it
+    wouldn't undo that, it would just make the ledger wrong in a
+    different way. A real warning is raised (not silently absorbed)
+    when a line's own post-shipment balance goes negative, the same
+    honest-signal spirit as every other module here.
     """
     fpath = data_file or DATA_FILE
     f = get_fulfillment(fulfillment_id, fpath)
@@ -200,6 +216,10 @@ def record_shipment(fulfillment_id, line_qty_shipped, carrier="", tracking_ref="
         raise ValueError(f"{fulfillment_id} not found.")
     if f["status"] not in ("Pending", "Picking"):
         raise ValueError(f"{fulfillment_id} is '{f['status']}' — can't ship from this state.")
+
+    import inventory as inv
+    items_by_mat = {i["mat_code"]: i for i in get_fulfillment_items(fulfillment_id, fpath)}
+    goods_issue_warnings = []
 
     conn = db.get_connection()
     try:
@@ -218,6 +238,22 @@ def record_shipment(fulfillment_id, line_qty_shipped, carrier="", tracking_ref="
     finally:
         conn.close()
 
+    for mat, qty in line_qty_shipped.items():
+        if qty <= 0:
+            continue
+        item = items_by_mat.get(mat)
+        mat_desc = item["mat_desc"] if item else mat
+        inv.record_transaction(mat, mat_desc, f["delivery_location"], -qty, "Goods Issue",
+                               reference_type="Fulfillment", reference_id=fulfillment_id,
+                               notes=f"Shipped against {f['so_id']}", data_file=data_file)
+        new_balance = inv.get_balance(mat, f["delivery_location"], data_file)
+        if new_balance < -0.005:
+            goods_issue_warnings.append(
+                f"{mat} at {f['delivery_location']} is now {new_balance:g} — this shipment "
+                f"posted against stock the ledger didn't actually show as available.")
+
+    return {"warnings": goods_issue_warnings}
+
 
 def record_delivery(fulfillment_id, pod_reference="", data_file=None):
     f = get_fulfillment(fulfillment_id, data_file)
@@ -230,9 +266,30 @@ def record_delivery(fulfillment_id, pod_reference="", data_file=None):
 
 
 def cancel_fulfillment(fulfillment_id, reason="", data_file=None):
+    """
+    A Shipped fulfillment being cancelled needs a real reversal, not
+    just a status flip — its own Goods Issue already reduced a real
+    location's balance in inventory.py's own ledger; leaving that
+    unreversed would mean cancelling a shipment permanently loses that
+    stock from the ledger, which never physically happened. A Pending
+    or Picking fulfillment never posted a Goods Issue in the first
+    place (nothing shipped yet), so nothing needs reversing there.
+    """
     f = get_fulfillment(fulfillment_id, data_file)
     if f and f["status"] == "Delivered":
         raise ValueError(f"{fulfillment_id} is already Delivered — can't cancel a completed fulfillment.")
+
+    if f and f["status"] == "Shipped":
+        import inventory as inv
+        for item in get_fulfillment_items(fulfillment_id, data_file):
+            qty = item["qty_shipped"] or 0
+            if qty > 0:
+                inv.record_transaction(item["mat_code"], item["mat_desc"], f["delivery_location"],
+                                       qty, "Goods Issue Reversal", reference_type="Fulfillment",
+                                       reference_id=fulfillment_id,
+                                       notes=f"Cancelled: {reason}" if reason else "Cancelled",
+                                       data_file=data_file)
+
     _set_field(fulfillment_id, {"Status": "Cancelled",
         "Notes": f"{(f or {}).get('notes','') or ''} | Cancelled: {reason}".strip(" |")}, data_file)
 

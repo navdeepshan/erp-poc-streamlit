@@ -36,6 +36,7 @@ _FALLBACKS = {
     "Demand Detection Mode": "Manufactured Items Only",
     "Default Transfer Lead Time Days": "3",
     "Time-Phased Planning Mode": "Sales Order Based",
+    "Use Stock Transfer Orders": "No",
 }
 
 

@@ -2,12 +2,9 @@
 
 import streamlit as st
 
-import accounting as acct
 import customer_onboarding as customers
 import goods_receipt as receipts
-import inventory
 import pr_consolidation as procurement
-import sales_order as orders
 import vendor_onboarding as vendors
 
 
@@ -62,4 +59,4 @@ with st.container(border=True):
     with action:
         st.page_link("agent_console.py", label="Open AI workspace", icon=":material/auto_awesome:", width="stretch")
 
-st.info("This is a demonstration environment. Hosted data changes may reset when the app restarts.", icon=":material/info:")
+st.info("This is a local demonstration environment.", icon=":material/info:")

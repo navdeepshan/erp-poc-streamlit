@@ -1,4 +1,4 @@
-"""Shared visual theme for the ERP Streamlit surfaces."""
+"""Shared visual theme and embedded chatbot for the ERP suite."""
 
 import streamlit as st
 
@@ -6,209 +6,115 @@ import streamlit as st
 THEME_CSS = """
 <style>
 :root {
-  --erp-navy: #111827;
-  --erp-blue: #315bea;
-  --erp-blue-dark: #2447c6;
-  --erp-cyan: #0f91a8;
-  --erp-ink: #182033;
-  --erp-muted: #667085;
-  --erp-line: #e1e6ed;
-  --erp-surface: #ffffff;
-  --erp-canvas: #f6f7f9;
+  --erp-navy:#101828; --erp-sidebar:#0f172a; --erp-blue:#2563eb;
+  --erp-blue-hover:#1d4ed8; --erp-ink:#101828; --erp-muted:#667085;
+  --erp-line:#e4e7ec; --erp-canvas:#f8fafc; --erp-surface:#ffffff;
 }
-
-.stApp {
-  background:
-    radial-gradient(circle at 88% -4%, rgba(49, 91, 234, .055), transparent 28rem),
-    var(--erp-canvas);
-}
-
-[data-testid="stHeader"] { background: rgba(243, 247, 251, .82); }
-[data-testid="stAppViewContainer"] > .main .block-container {
-  max-width: 1500px;
-  padding-top: 2rem;
-  padding-bottom: 4rem;
-}
-
-[data-testid="stSidebar"] {
-  background: #111827;
-  border-right: 0;
-  box-shadow: 8px 0 24px rgba(17, 24, 39, .08);
-}
-[data-testid="stSidebar"] * { color: #e8f1f8 !important; }
-[data-testid="stSidebar"] hr { border-color: rgba(255,255,255,.14) !important; }
-[data-testid="stSidebar"] [role="radiogroup"] label {
-  padding: .62rem .7rem;
-  border-radius: .65rem;
-  margin: .1rem 0;
-  transition: background .16s ease, transform .16s ease;
-}
-[data-testid="stSidebar"] [role="radiogroup"] label:hover {
-  background: rgba(255,255,255,.1);
-  transform: translateX(2px);
-}
-[data-testid="stSidebar"] [data-baseweb="radio"] > div:first-child {
-  border-color: #67e8f9 !important;
-}
-
-h1, h2, h3 { color: var(--erp-navy) !important; letter-spacing: -.02em; }
-h4, h5, h6 { color: #243b53 !important; }
-p, label, [data-testid="stCaptionContainer"] { color: var(--erp-muted); }
-
-div[data-testid="stMetric"] {
-  background: #ffffff;
-  border: 1px solid var(--erp-line);
-  border-radius: 14px;
-  padding: 1rem 1.1rem;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, .035);
-}
-div[data-testid="stMetricLabel"] { color: var(--erp-muted) !important; }
-div[data-testid="stMetricValue"] { color: var(--erp-navy) !important; font-weight: 750; }
-
-.stButton > button, .stDownloadButton > button {
-  border-radius: 9px !important;
-  min-height: 2.55rem;
-  font-weight: 650 !important;
-  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
-}
-.stButton > button[kind="primary"] {
-  color: white !important;
-  border: 0 !important;
-  background: var(--erp-blue) !important;
-  box-shadow: 0 2px 5px rgba(49, 91, 234, .18);
-}
-.stButton > button:hover, .stDownloadButton > button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 20px rgba(15, 42, 67, .15);
-}
-.stButton > button[kind="secondary"], .stDownloadButton > button {
-  background: white !important;
-  color: var(--erp-blue) !important;
-  border: 1px solid #b9cbe0 !important;
-}
-
-[data-baseweb="input"] > div, [data-baseweb="select"] > div,
-[data-baseweb="textarea"] > div {
-  background: white !important;
-  border-color: #c8d5e3 !important;
-  border-radius: 9px !important;
-}
-input, textarea { color: var(--erp-ink) !important; }
-
-div[data-baseweb="tab-list"] {
-  gap: .35rem;
-  background: #e8eff7;
-  border-radius: 11px;
-  padding: .28rem;
-}
-button[data-baseweb="tab"] { border-radius: 8px; padding: .35rem .9rem; }
-button[data-baseweb="tab"][aria-selected="true"] {
-  background: white;
-  color: var(--erp-blue) !important;
-  box-shadow: 0 2px 8px rgba(15, 42, 67, .09);
-}
-
-[data-testid="stDataFrame"], details {
-  background: white;
-  border: 1px solid var(--erp-line) !important;
-  border-radius: 12px !important;
-  overflow: hidden;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, .03);
-}
-[data-testid="stAlert"] { border-radius: 10px; }
-hr { border-color: var(--erp-line) !important; }
-
+html,body,[class*="css"] { font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+.stApp { background:var(--erp-canvas) !important; color:var(--erp-ink); }
+[data-testid="stHeader"] { background:rgba(248,250,252,.92) !important; border-bottom:1px solid rgba(228,231,236,.65); }
+[data-testid="stAppViewContainer"] > .main .block-container { max-width:1440px; padding:2.25rem 2.5rem 4rem; }
+[data-testid="stSidebar"] { background:var(--erp-sidebar) !important; border-right:1px solid #1e293b !important; box-shadow:none !important; }
+[data-testid="stSidebarContent"] { padding:.65rem .7rem 1rem; }
+[data-testid="stSidebar"] * { color:#cbd5e1 !important; }
+[data-testid="stSidebar"] h3 { color:#fff !important; font-size:.9rem !important; font-weight:650 !important; letter-spacing:0 !important; }
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] { color:#94a3b8 !important; font-size:.71rem; text-transform:uppercase; letter-spacing:.09em; }
+[data-testid="stSidebar"] hr { border-color:#25334a !important; margin:.75rem 0 !important; }
+[data-testid="stSidebar"] [role="radiogroup"] { gap:.15rem; }
+[data-testid="stSidebar"] [role="radiogroup"] label { padding:.58rem .66rem !important; border-radius:7px !important; margin:0 !important; transition:background .14s ease; }
+[data-testid="stSidebar"] [role="radiogroup"] label:hover { background:#1e293b !important; transform:none !important; }
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) { background:#243451 !important; box-shadow:inset 3px 0 0 #60a5fa; }
+[data-testid="stSidebar"] [role="radiogroup"] label p { color:#e2e8f0 !important; font-size:.84rem !important; }
+[data-testid="stSidebar"] [data-baseweb="radio"] > div:first-child { display:none !important; }
+[data-testid="stSidebar"] [data-testid="stSidebarNav"] a { border-radius:7px; margin:2px 0; }
+[data-testid="stSidebar"] [data-testid="stSidebarNav"] a:hover { background:#1e293b; }
+[data-testid="stSidebar"] [data-testid="stSidebarNav"] a[aria-current="page"] { background:#243451; }
+h1,h2,h3 { color:var(--erp-navy) !important; letter-spacing:-.025em; font-weight:680 !important; }
+h1 { font-size:2rem !important; line-height:1.2 !important; }
+h2 { font-size:1.45rem !important; line-height:1.3 !important; }
+h3 { font-size:1.12rem !important; }
+h4,h5,h6 { color:#344054 !important; font-weight:650 !important; }
+p,label,[data-testid="stCaptionContainer"] { color:var(--erp-muted) !important; line-height:1.55; }
+div[data-testid="stMetric"] { background:var(--erp-surface) !important; border:1px solid var(--erp-line) !important; border-radius:10px !important; padding:1rem 1.1rem !important; box-shadow:0 1px 2px rgba(16,24,40,.04) !important; }
+div[data-testid="stMetricLabel"] { color:#667085 !important; font-size:.74rem !important; font-weight:550; }
+div[data-testid="stMetricValue"] { color:var(--erp-navy) !important; font-size:1.55rem !important; font-weight:700 !important; letter-spacing:-.025em; }
+.stButton > button,.stDownloadButton > button { border-radius:7px !important; min-height:2.45rem; padding:.45rem .9rem !important; font-size:.84rem !important; font-weight:600 !important; box-shadow:none !important; transition:background .14s ease,border-color .14s ease !important; }
+.stButton > button[kind="primary"] { color:#fff !important; border:1px solid var(--erp-blue) !important; background:var(--erp-blue) !important; }
+.stButton > button[kind="primary"] * { color:#fff !important; }
+.stButton > button[kind="primary"]:hover { background:var(--erp-blue-hover) !important; border-color:var(--erp-blue-hover) !important; transform:none !important; }
+.stButton > button[kind="secondary"],.stDownloadButton > button { background:#fff !important; color:#344054 !important; border:1px solid #d0d5dd !important; }
+.stButton > button[kind="secondary"]:hover,.stDownloadButton > button:hover { background:#f9fafb !important; border-color:#98a2b3 !important; transform:none !important; }
+[data-baseweb="input"] > div,[data-baseweb="select"] > div,[data-baseweb="textarea"] > div { background:#fff !important; border:1px solid #d0d5dd !important; border-radius:7px !important; box-shadow:0 1px 2px rgba(16,24,40,.04) !important; }
+[data-baseweb="input"] > div:focus-within,[data-baseweb="select"] > div:focus-within,[data-baseweb="textarea"] > div:focus-within { border-color:#84adff !important; box-shadow:0 0 0 3px rgba(37,99,235,.1) !important; }
+input,textarea { color:var(--erp-ink) !important; }
+div[data-baseweb="tab-list"] { gap:.2rem; background:transparent !important; border:0 !important; border-bottom:1px solid var(--erp-line) !important; border-radius:0 !important; padding:0 !important; }
+button[data-baseweb="tab"] { border-radius:0 !important; padding:.6rem .85rem !important; border-bottom:2px solid transparent !important; }
+button[data-baseweb="tab"][aria-selected="true"] { background:transparent !important; color:var(--erp-blue) !important; border-bottom-color:var(--erp-blue) !important; box-shadow:none !important; }
+[data-testid="stDataFrame"] { background:#fff !important; border:1px solid var(--erp-line) !important; border-radius:9px !important; overflow:hidden; box-shadow:none !important; }
+details { background:#fff !important; border:1px solid var(--erp-line) !important; border-radius:8px !important; margin-bottom:.5rem !important; box-shadow:none !important; }
+summary { padding:.75rem .9rem !important; font-size:.88rem; }
+[data-testid="stAlert"] { border-radius:8px !important; border-width:1px !important; box-shadow:none !important; }
+hr { border-color:var(--erp-line) !important; margin:1.25rem 0 !important; }
 .erp-brand { display:flex; align-items:center; gap:.75rem; padding:.35rem .15rem 1rem; }
-.erp-brand-mark { width:2.15rem; height:2.15rem; display:grid; place-items:center;
-  border-radius:.65rem; background:#315bea; color:#fff!important; font-weight:800; font-size:1rem; }
-.erp-brand strong { display:block; color:#fff!important; letter-spacing:-.01em; }
+.erp-brand-mark { width:2rem; height:2rem; display:grid; place-items:center; border-radius:7px; background:#2563eb; color:#fff!important; font-weight:750; }
+.erp-brand strong { display:block; color:#fff!important; }
 .erp-brand small { display:block; color:#98a2b3!important; font-size:.58rem; letter-spacing:.12em; margin-top:.12rem; }
-.erp-section-label, .erp-eyebrow { font-size:.67rem; letter-spacing:.13em; font-weight:750; }
-.erp-section-label { color:#98a2b3!important; padding:.6rem .25rem .25rem; }
-.erp-eyebrow { color:#315bea!important; margin-bottom:.5rem; }
+.erp-eyebrow { color:#315bea!important; font-size:.67rem; letter-spacing:.13em; font-weight:750; margin-bottom:.5rem; }
 [data-testid="stSidebarNav"] span { font-size:.88rem; }
-[data-testid="stVerticalBlockBorderWrapper"] { background:#fff; border-radius:14px; }
-
-@media (max-width: 768px) {
-  [data-testid="stAppViewContainer"] > .main .block-container { padding-top: 1rem; }
-  div[data-testid="stMetric"] { padding: .8rem; }
-}
+[data-testid="stVerticalBlockBorderWrapper"] { background:#fff; border-color:var(--erp-line) !important; border-radius:10px !important; box-shadow:0 1px 2px rgba(16,24,40,.035); }
+@media (max-width:768px) { [data-testid="stAppViewContainer"] > .main .block-container { padding:1.15rem 1rem 3rem; } h1{font-size:1.65rem!important;} div[data-testid="stMetric"]{padding:.8rem!important;} }
 </style>
 """
 
 
 def apply_theme():
-    """Inject the shared app styling after ``st.set_page_config``."""
     st.markdown(THEME_CSS, unsafe_allow_html=True)
-    _hide_streamlit_cloud_manager()
+    _install_chatbot()
 
 
-def _hide_streamlit_cloud_manager():
-    """Hide Community Cloud's owner management drawer from the product UI."""
+def _install_chatbot():
     script = """
     <script>
     (() => {
-      const clean = () => {
+      const install = () => {
         try {
           const doc = window.top.document;
-          for (const button of doc.querySelectorAll('button')) {
-            const label = (button.getAttribute('aria-label') || '').trim();
-            const text = (button.textContent || '').trim();
-            if (label === 'Close manage app panel') button.click();
-            if (text === 'Manage app') button.style.setProperty('display', 'none', 'important');
-          }
-          if (!doc.getElementById('erp-chat-launcher')) {
-            const launcher = doc.createElement('button');
-            launcher.id = 'erp-chat-launcher';
-            launcher.textContent = 'Chat';
-            launcher.setAttribute('aria-label', 'Open embedded ERP chat');
-            launcher.style.cssText = 'position:fixed;right:24px;bottom:24px;z-index:2147483647;height:52px;padding:0 22px;border:0;border-radius:26px;background:#315bea;color:#fff;font:600 15px system-ui;box-shadow:0 10px 30px rgba(17,24,39,.28);cursor:pointer';
-            launcher.onclick = () => {
-              let panel = doc.getElementById('erp-chat-panel');
-              if (panel) {
-                panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
-                return;
-              }
-              panel = doc.createElement('section');
-              panel.id = 'erp-chat-panel';
-              panel.setAttribute('aria-label', 'Embedded ERP Reporting Assistant');
-              panel.style.cssText = 'position:fixed;right:24px;bottom:88px;z-index:2147483646;width:min(430px,calc(100vw - 32px));height:min(680px,calc(100vh - 120px));display:flex;flex-direction:column;overflow:hidden;background:#fff;border:1px solid #d9e2ec;border-radius:18px;box-shadow:0 24px 70px rgba(17,24,39,.3)';
-              const header = doc.createElement('div');
-              header.style.cssText = 'height:54px;flex:0 0 54px;display:flex;align-items:center;justify-content:space-between;padding:0 14px 0 18px;background:#111827;color:#fff;font:600 15px system-ui';
-              header.textContent = 'Reporting Assistant';
-              const close = doc.createElement('button');
-              close.textContent = '×';
-              close.setAttribute('aria-label', 'Close embedded ERP chat');
-              close.style.cssText = 'border:0;background:transparent;color:#fff;font-size:26px;cursor:pointer;line-height:1';
-              close.onclick = () => { panel.style.display = 'none'; };
-              header.appendChild(close);
-              const frame = doc.createElement('iframe');
-              frame.title = 'Embedded ERP Chat';
-              frame.src = window.top.location.origin + '/agent_console?embedded_chat=1';
-              frame.style.cssText = 'width:100%;height:100%;border:0;background:#fff';
-              panel.appendChild(header);
-              panel.appendChild(frame);
-              doc.body.appendChild(panel);
-            };
-            doc.body.appendChild(launcher);
-          }
+          if (doc.getElementById('erp-chat-launcher')) return;
+          const launcher = doc.createElement('button');
+          launcher.id = 'erp-chat-launcher';
+          launcher.textContent = window.top.innerWidth < 768 ? '✦' : '✦  Ask Northstar';
+          launcher.setAttribute('aria-label', 'Open ERP assistant');
+          launcher.style.cssText = `position:fixed;right:${window.top.innerWidth < 768 ? '16px' : '24px'};bottom:${window.top.innerWidth < 768 ? '16px' : '24px'};z-index:2147483647;height:52px;min-width:52px;padding:0 ${window.top.innerWidth < 768 ? '0' : '22px'};border:0;border-radius:26px;background:#2563eb;color:#fff;font:600 15px system-ui;box-shadow:0 10px 28px rgba(17,24,39,.24);cursor:pointer`;
+          launcher.onclick = () => {
+            let panel = doc.getElementById('erp-chat-panel');
+            if (panel) { panel.style.display = panel.style.display === 'none' ? 'flex' : 'none'; return; }
+            panel = doc.createElement('section');
+            panel.id = 'erp-chat-panel';
+            panel.setAttribute('aria-label', 'Northstar ERP assistant');
+            panel.style.cssText = 'position:fixed;right:24px;bottom:88px;z-index:2147483646;width:min(430px,calc(100vw - 32px));height:min(680px,calc(100vh - 120px));display:flex;flex-direction:column;overflow:hidden;background:#fff;border:1px solid #d9e2ec;border-radius:18px;box-shadow:0 24px 70px rgba(17,24,39,.3)';
+            const header = doc.createElement('div');
+            header.style.cssText = 'height:56px;flex:0 0 56px;display:flex;align-items:center;justify-content:space-between;padding:0 14px 0 18px;background:#111827;color:#fff;font:600 15px system-ui';
+            header.innerHTML = '<span>✦ &nbsp;Northstar Assistant</span>';
+            const close = doc.createElement('button');
+            close.textContent = '×'; close.setAttribute('aria-label','Close ERP assistant');
+            close.style.cssText = 'border:0;background:transparent;color:#fff;font-size:26px;cursor:pointer;line-height:1';
+            close.onclick = () => { panel.style.display = 'none'; };
+            header.appendChild(close);
+            const frame = doc.createElement('iframe');
+            frame.title = 'Northstar ERP Chat';
+            frame.src = window.top.location.origin + '/agent_console?embedded_chat=1';
+            frame.style.cssText = 'width:100%;height:100%;border:0;background:#fff';
+            panel.append(header, frame); doc.body.appendChild(panel);
+          };
+          doc.body.appendChild(launcher);
         } catch (_) {}
       };
-      clean();
-      const timer = setInterval(clean, 500);
-      setTimeout(() => clearInterval(timer), 30000);
+      install(); const timer = setInterval(install,500); setTimeout(() => clearInterval(timer),30000);
     })();
     </script>
     """
-    if hasattr(st, "iframe"):
-        st.iframe(script, width="stretch", height=1)
-    else:
-        st.components.v1.html(script, height=0)
+    st.components.v1.html(script, height=0)
 
 
 def embed_html(content, *, height, scrolling=False):
-    """Embed trusted app HTML without emitting Streamlit deprecation warnings."""
-    if hasattr(st, "iframe"):
-        st.iframe(content, width="stretch", height=height)
-    else:  # Compatibility with the older local development runtime.
-        st.components.v1.html(content, height=height, scrolling=scrolling)
+    st.components.v1.html(content, height=height, scrolling=scrolling)

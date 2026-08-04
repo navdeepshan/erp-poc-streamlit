@@ -7,23 +7,9 @@ fully migrated.
 
 ## Requirements
 ```
-pip install -r requirements.txt
+pip install streamlit openpyxl pandas
 ```
-(Python 3.12 recommended; sqlite3 is stdlib.)
-
-## Deploy to Streamlit Community Cloud
-
-1. Push this folder to a GitHub repository (keep `erp_pilot.db` in the repository;
-   it contains the demo data).
-2. In Streamlit Community Cloud, select **Create app**, choose that repository and
-   branch, and set the main file path to `erp_ui.py`.
-3. Deploy. `requirements.txt`, `runtime.txt`, and `.streamlit/config.toml` are
-   already configured for the cloud runtime.
-
-The bundled SQLite database is suitable for a demonstration deployment. Changes
-made in the hosted app are stored on the instance's ephemeral filesystem and can
-be lost when Streamlit restarts or redeploys the app. Use an external database
-before treating this as a production or multi-user system.
+(Python 3.10+ recommended; sqlite3 is stdlib.)
 
 ## Setup
 Put every file in this folder in the **same directory**.
@@ -50,7 +36,9 @@ python seed_bundle_from_bom.py
 
 ## Run (each in its own terminal)
 ```
-streamlit run streamlit_app.py  # Complete unified ERP suite
+streamlit run erp_ui.py     # Source-to-Pay: Bundles, PR -> PO, RFx, Vendors, Contracts
+streamlit run mfg_ui.py     # Manufacturing: Goods Receipt, QC, BOM, Production, Inventory
+streamlit run o2c_ui.py     # Order-to-Cash: Quotes, Sales Orders, Fulfillment, Billing, Accounting, Cash
 ```
 
 ## What's SQLite-backed (all of it)

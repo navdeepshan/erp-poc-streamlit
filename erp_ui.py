@@ -33,7 +33,6 @@ import vrq
 import contracts as ct
 import org_defaults as od
 import legal_entities as le
-from ui_theme import apply_theme, embed_html
 
 DATA_FILE = os.path.join(_DIR, "data.xlsx")
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -53,7 +52,56 @@ def _build_zip(files):
     return buf.read()
 
 # ── Page config ───────────────────────────────────────────────────────────────
-# Page configuration and the shared theme are owned by streamlit_app.py.
+st.set_page_config(page_title="ERP Procurement", page_icon="\U0001f4cb",
+                   layout="wide", initial_sidebar_state="expanded")
+
+st.markdown("""
+<style>
+.stApp{background:#F8FAFC}
+[data-testid="stSidebar"]{background:#fff;border-right:1px solid #E2E8F0}
+body,p,div,label,span{color:#1E293B!important}
+h1,h2,h3{color:#0F172A!important;font-weight:600}
+.stMarkdown p{color:#334155!important}
+[data-testid="stSidebar"] *{color:#334155!important}
+.stTextInput input,.stNumberInput input,.stDateInput input{
+  background:#fff!important;color:#1E293B!important;
+  border:1px solid #CBD5E1!important;border-radius:6px!important}
+.stTextInput input:focus{border-color:#2563EB!important;
+  box-shadow:0 0 0 3px rgba(37,99,235,.12)!important}
+.stSelectbox>div>div{background:#fff!important;color:#1E293B!important;
+  border:1px solid #CBD5E1!important;border-radius:6px!important}
+div[data-testid="stMetric"]{background:#fff;border:1px solid #E2E8F0;
+  border-radius:10px;padding:14px 18px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+div[data-testid="stMetricLabel"]{color:#64748B!important;font-size:12px!important}
+div[data-testid="stMetricValue"]{color:#0F172A!important;font-weight:700!important}
+.stButton>button{background:#2563EB!important;color:#fff!important;
+  border:none!important;border-radius:7px!important;font-weight:500!important}
+.stButton>button:hover{background:#1D4ED8!important}
+.stButton>button[kind="secondary"]{background:#fff!important;
+  color:#374151!important;border:1px solid #D1D5DB!important}
+.stButton>button:disabled{background:#94A3B8!important;cursor:not-allowed!important}
+.stDownloadButton>button{background:#059669!important;color:#fff!important;
+  border:none!important;border-radius:7px!important}
+.stDataFrame{border:1px solid #E2E8F0!important;border-radius:8px!important}
+.stSuccess{background:#F0FDF4!important;border:1px solid #86EFAC!important;border-radius:8px!important}
+.stError{background:#FEF2F2!important;border:1px solid #FECACA!important;border-radius:8px!important}
+.stWarning{background:#FFFBEB!important;border:1px solid #FDE68A!important;border-radius:8px!important}
+.stInfo{background:#EFF6FF!important;border:1px solid #BFDBFE!important;border-radius:8px!important}
+div[data-baseweb="tab-list"]{background:#F1F5F9;border-radius:8px;
+  padding:4px;border:1px solid #E2E8F0}
+div[data-baseweb="tab"]{color:#64748B!important;border-radius:6px!important}
+div[data-baseweb="tab"][aria-selected="true"]{background:#fff!important;
+  color:#1E293B!important;box-shadow:0 1px 3px rgba(0,0,0,.1)!important}
+details{background:#fff;border:1px solid #E2E8F0!important;
+  border-radius:8px!important;margin-bottom:6px!important}
+summary{color:#1E293B!important;font-weight:500!important;padding:12px 16px!important}
+hr{border-color:#E2E8F0!important}
+</style>""", unsafe_allow_html=True)
+
+# Re-apply the suite design system after this legacy page stylesheet so the
+# unified shell remains visually consistent across every workspace.
+from ui_theme import apply_theme
+apply_theme()
 
 # ── Startup check ─────────────────────────────────────────────────────────────
 # Checks erp_pilot.db, not data.xlsx — data.xlsx hasn't been a real runtime
@@ -71,9 +119,9 @@ if not os.path.exists(db.DB_FILE):
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown('<div class="erp-section-label">SOURCE TO PAY</div>', unsafe_allow_html=True)
+    st.markdown("### \U0001f4cb ERP Procurement")
     st.divider()
-    page = st.radio("Source-to-Pay section", ["\U0001f4e6  Purchase Bundles",
+    page = st.radio("", ["\U0001f4e6  Purchase Bundles",
                          "\U0001f195  Create PR",
                          "\U0001f504  Consolidate PRs \u2192 POs",
                          "\U0001f4e4  Direct PO Entry",
@@ -143,7 +191,7 @@ def render_item_picker(sk):
                               key=f"{sk}_q", label_visibility="collapsed")
     with s2:
         do_search = st.button("\U0001f50d Search", key=f"{sk}_sbtn",
-                              width="stretch")
+                              use_container_width=True)
     with s3:
         cat = st.selectbox("Cat", cats, key=f"{sk}_cat",
                            label_visibility="collapsed")
@@ -168,7 +216,7 @@ def render_item_picker(sk):
     if st.button(f"\u2795  Add {n_sel} selected item(s)" if n_sel else "\u2795  Add selected item(s)",
                  type="primary", key=f"{sk}_add",
                  disabled=(n_sel == 0),
-                 width="stretch"):
+                 use_container_width=True):
         added = 0
         for item in items:
             if (item["code"] in st.session_state[selected_k]
@@ -191,7 +239,7 @@ def render_item_picker(sk):
             in_list = item["code"] in staged_codes
             c1, c2, c3 = st.columns([0.5, 6.5, 1.5])
             with c1:
-                new_val = st.checkbox(f"Select {item['code']}", value=checked,
+                new_val = st.checkbox("", value=checked,
                     key=f"{sk}_c_{item['code']}",
                     label_visibility="collapsed")
                 if new_val != checked:
@@ -258,7 +306,7 @@ def render_staged_table(sk, show_vendor=False):
     if show_vendor:
         cfg["Vendor"] = st.column_config.TextColumn(disabled=True, width=100)
 
-    edited = st.data_editor(df[cols], width="stretch",
+    edited = st.data_editor(df[cols], use_container_width=True,
                             hide_index=True, column_config=cfg, key=f"{sk}_tbl")
 
     # Sync qty from the edited table back to session_state.
@@ -298,7 +346,7 @@ def render_staged_table(sk, show_vendor=False):
         pass  # coverage check is advisory only — never let it block staging/saving
 
     with st.expander("\U0001f5d1  Remove items"):
-        to_rm = st.multiselect("Items to remove", [i["code"] for i in staged],
+        to_rm = st.multiselect("", [i["code"] for i in staged],
                                key=f"{sk}_rm", label_visibility="collapsed")
         if to_rm and st.button("Remove", key=f"{sk}_do_rm"):
             st.session_state[staged_k] = [i for i in staged if i["code"] not in to_rm]
@@ -355,14 +403,14 @@ def render_bundle_picker(sk):
     st.dataframe(
         pd.DataFrame([{"Code": i["mat_code"], "Description": i["mat_desc"],
                        "UOM": i["uom"], "Default Qty": i["default_qty"]} for i in items]),
-        width="stretch", hide_index=True, height=min(250, 42 + 35 * len(items)))
+        use_container_width=True, hide_index=True, height=min(250, 42 + 35 * len(items)))
 
     multiplier = st.number_input("Multiply quantities by", min_value=1, value=1, step=1,
                                  key=f"{sk}_bdl_mult",
                                  help="E.g. picking this bundle for 3 sites at once.")
 
     if st.button(f"\u2795  Add {len(items)} bundle item(s) to PR", type="primary",
-                 width="stretch", key=f"{sk}_bdl_add"):
+                 use_container_width=True, key=f"{sk}_bdl_add"):
         exploded = pbdl.explode_bundle(sel_id, multiplier=multiplier)
         staged_codes = {i["code"] for i in st.session_state[staged_k]}
         added = 0
@@ -468,7 +516,7 @@ def page_create_pr():
             st.markdown("")
 
             if st.button("\u2705  Create PR", type="primary",
-                         width="stretch", key="pr_create"):
+                         use_container_width=True, key="pr_create"):
                 lines = [i for i in st.session_state.pr_staged if i.get("qty",0) > 0]
                 if not lines:
                     st.error("Set at least one quantity > 0 before creating.")
@@ -491,9 +539,9 @@ def page_create_pr():
                         st.cache_data.clear()
                     except Exception:
                         st.error("\u274c Error writing PR — see details below:")
-                        st.caption("Technical details hidden.")
+                        st.code(traceback.format_exc())
 
-            if st.button("\U0001f5d1 Clear list", width="stretch", key="pr_clr"):
+            if st.button("\U0001f5d1 Clear list", use_container_width=True, key="pr_clr"):
                 st.session_state.pr_staged   = []
                 st.session_state.pr_selected = set()
                 st.rerun()
@@ -513,12 +561,11 @@ def page_consolidate():
     st.markdown("## \U0001f504 PR Consolidation")
     st.divider()
 
-    with st.expander("\U0001f5fa\ufe0f All POs Map — every PO ever created, not just this session"):
-        st.caption("The Map tab after clicking Consolidate only shows what that specific run "
-                  "just created. This shows everything in PO_Header right now, regardless of "
-                  "when or how it was created — including Direct PO Entry. The map and the "
-                  "line-item list below it are kept in sync — both filtered by the same date "
-                  "range, so a PO isn't shown as a route while being invisible in the list.")
+    with st.expander("\U0001f5fa\ufe0f All POs Map — every PO within the selected date range, not just this session"):
+        st.caption("Shows every PO in PO_Header regardless of when or how it was created "
+                  "— including Direct PO Entry — filtered to the date range below. The map "
+                  "and the line-item list beneath it share the same filter, so a PO is never "
+                  "shown as a route while missing from the list, or vice versa.")
 
         dpo1, dpo2 = st.columns(2)
         with dpo1:
@@ -554,7 +601,7 @@ def page_consolidate():
                     "material_desc":"Description","uom":"UOM","quantity":"Qty",
                     "unit_price":"Unit Price","delivery_date":"Delivery Date",
                     "delivery_location":"Delivery Location","source_pr_number":"Source PR"})
-                st.dataframe(shown, width="stretch", hide_index=True, height=300)
+                st.dataframe(shown, use_container_width=True, hide_index=True, height=300)
 
     st.divider()
 
@@ -617,7 +664,7 @@ def page_consolidate():
 
         show = ["PR","PR_Date","Line","Requester","Code","Description","UOM","Qty","Status","Vendor"]
         if "PO_Number" in df_shown.columns: show += ["PO_Number","PO_Item"]
-        st.dataframe(df_shown[show], width="stretch", hide_index=True, height=250)
+        st.dataframe(df_shown[show], use_container_width=True, hide_index=True, height=250)
 
     st.divider()
     one_to_one = st.toggle("1:1 PR \u2192 PO Lines", value=True,
@@ -643,7 +690,7 @@ def page_consolidate():
                 st.success(f"\u2705 Cleared {result['po_count']} proposed PO(s). "
                           f"{result['pr_lines_reset']} PR line(s) reset to Open.")
             except Exception:
-                st.error("\u274c Error:"); st.caption("Technical details hidden.")
+                st.error("\u274c Error:"); st.code(traceback.format_exc())
 
     if n_open == 0 and not st.session_state.get("consolidate_result"):
         st.warning("No Open lines to consolidate.")
@@ -658,7 +705,7 @@ def page_consolidate():
             st.session_state.consolidate_result = result
         except Exception:
             st.error("\u274c Consolidation failed:")
-            st.caption("Technical details hidden.")
+            st.code(traceback.format_exc())
 
     # Rendered from session_state, not gated behind the button's live return
     # value — a REAL bug fixed here, not a cosmetic one. Every button inside
@@ -697,7 +744,7 @@ def page_consolidate():
                 st.dataframe(pd.DataFrame(rfp)[["rfp_number","mat_code","mat_desc",
                     "uom","total_qty","req_by_date","source_prs","req_depts",
                     "closing_date","status"]],
-                    width="stretch", hide_index=True)
+                    use_container_width=True, hide_index=True)
             else:
                 st.info("No RFP lines.")
 
@@ -772,7 +819,7 @@ def _po_av(result):
                              "uom":"UOM","qty":"Qty","deliv_date":"Delivery",
                              "deliv_loc":"Location","source_pr":"Source PR",
                              "source_pr_line":"PR Line","req_dept":"Dept"}),
-                width="stretch", hide_index=True)
+                use_container_width=True, hide_index=True)
             if st.button(f"\U0001f4e4  Create PO {po_num}", key=f"av_{po_num}"):
                 try:
                     fname, fdata = po_export.make_av_bytes(po_num, vendor,
@@ -785,7 +832,7 @@ def _po_av(result):
                     st.download_button(f"\u2b07 Download {fname}", data=fdata,
                         file_name=fname, mime=XLSX_MIME, key=f"dl_{po_num}")
                 except Exception:
-                    st.error("Export failed:"); st.caption("Technical details hidden.")
+                    st.error("Export failed:"); st.code(traceback.format_exc())
 
 
 def _flow(result):
@@ -883,7 +930,7 @@ def _flow(result):
           f'<defs><marker id="ahp" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#059669"/></marker>' +
           f'<marker id="ahr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#DC2626"/></marker></defs>' +
           "".join(svg) + '</svg></div>')
-    embed_html(html, height=SH+80, scrolling=True)
+    st.components.v1.html(html, height=SH+80, scrolling=True)
 
 
 def _map(geo):
@@ -950,7 +997,7 @@ V.filter(v=>v.lat).map(v=>`<div><span style="width:12px;height:12px;background:$
 `<div><span style="display:inline-block;width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:12px solid #0284C7;margin-right:6px;vertical-align:middle"></span>Delivery</div>`;return d;}};
 leg.addTo(map);
 </script></body></html>"""
-    embed_html(html, height=500)
+    st.components.v1.html(html, height=500)
     st.caption("Squares=suppliers  \u00b7  Triangles=delivery  \u00b7  Arcs=PO routes  \u00b7  "
                "Use the **Fit** button (top-right of the map) any time to re-frame every point.")
 
@@ -1017,7 +1064,7 @@ def page_direct_po():
             render_staged_table("po")
             st.markdown("")
             if st.button("\U0001f4e4  Create PO", type="primary",
-                         width="stretch", key="dpo_send",
+                         use_container_width=True, key="dpo_send",
                          disabled=not sup_id):
                 lines = [i for i in staged if i.get("qty",0)>0]
                 if not lines:
@@ -1056,8 +1103,8 @@ def page_direct_po():
                         del st.session_state["dpo_n"]
                         st.cache_data.clear()
                     except Exception:
-                        st.error("\u274c PO creation failed:"); st.caption("Technical details hidden.")
-            if st.button("\U0001f5d1 Clear", width="stretch", key="dpo_clr"):
+                        st.error("\u274c PO creation failed:"); st.code(traceback.format_exc())
+            if st.button("\U0001f5d1 Clear", use_container_width=True, key="dpo_clr"):
                 st.session_state.po_staged=[]; st.session_state.po_selected=set(); st.rerun()
         else:
             st.markdown("<div style='color:#94A3B8;padding:36px;text-align:center;"
@@ -1098,7 +1145,7 @@ def page_categorization():
         return
 
     if st.button("\U0001f916  Run Autonomous Categorization",
-                 type="primary", width="stretch", key="cat_run"):
+                 type="primary", use_container_width=True, key="cat_run"):
         with st.spinner("Classifying uncategorized items…"):
             st.session_state.cat_preview = categorization.preview_categorization(only_blank=True)
         st.rerun()
@@ -1139,7 +1186,7 @@ def page_categorization():
             "confidence": st.column_config.TextColumn("Conf.", disabled=True, width=70),
             "matched_keywords": st.column_config.TextColumn("Matched on", disabled=True, width=180),
         }
-        edited = st.data_editor(df, width="stretch", hide_index=True,
+        edited = st.data_editor(df, use_container_width=True, hide_index=True,
                                  column_config=cfg, key=key, height=min(420, 42+35*len(rows)))
         out = []
         for i, row in edited.iterrows():
@@ -1158,7 +1205,7 @@ def page_categorization():
 
     st.divider()
     if st.button("\u2705  Apply to Item Master", type="primary",
-                 width="stretch", key="cat_apply"):
+                 use_container_width=True, key="cat_apply"):
         try:
             n = categorization.apply_categorization(edited_hi + edited_lo)
             st.success(f"\u2705 {n} item(s) categorized.")
@@ -1167,7 +1214,7 @@ def page_categorization():
             st.rerun()
         except Exception:
             st.error("\u274c Error applying categorization:")
-            st.caption("Technical details hidden.")
+            st.code(traceback.format_exc())
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1223,11 +1270,11 @@ def page_rfx():
                 st.caption(f"{len(filtered_rfps)} of {len(open_rfps)} open line(s) match this filter.")
                 b1, b2 = st.columns(2)
                 with b1:
-                    if st.button("\u2611\ufe0f Select all filtered", width="stretch", key="rfx_selall"):
+                    if st.button("\u2611\ufe0f Select all filtered", use_container_width=True, key="rfx_selall"):
                         st.session_state.rfx_batch_sel = list(labels.keys())
                         st.rerun()
                 with b2:
-                    if st.button("\u2b1c Clear selection", width="stretch", key="rfx_clearall"):
+                    if st.button("\u2b1c Clear selection", use_container_width=True, key="rfx_clearall"):
                         st.session_state.rfx_batch_sel = []
                         st.rerun()
 
@@ -1251,7 +1298,7 @@ def page_rfx():
                 if suggestions:
                     sdf = pd.DataFrame(suggestions)[["id","name","city","lines_matched","reason"]]
                     sdf.columns = ["Vendor","Name","City","Lines matched","Why"]
-                    st.dataframe(sdf, width="stretch", hide_index=True)
+                    st.dataframe(sdf, use_container_width=True, hide_index=True)
                 else:
                     st.info("No active vendors found in Vendor_Master.")
 
@@ -1263,7 +1310,7 @@ def page_rfx():
                 c1, c2 = st.columns(2)
                 with c1:
                     gen = st.button("\U0001f4c4  Generate RFQ Document(s)", type="primary",
-                                    width="stretch", key="rfx_gen",
+                                    use_container_width=True, key="rfx_gen",
                                     disabled=(len(invite_ids) == 0))
                 with c2:
                     also_sim = st.checkbox("Also simulate their response (demo)", key="rfx_also_sim")
@@ -1280,7 +1327,7 @@ def page_rfx():
                             if also_sim:
                                 rfx.simulate_quotes_batch(chosen, vid)
                         except Exception:
-                            st.error(f"Failed for {vid}:"); st.caption("Technical details hidden.")
+                            st.error(f"Failed for {vid}:"); st.code(traceback.format_exc())
                     st.session_state.rfx_generated_docs = generated
                     st.cache_data.clear()
 
@@ -1295,7 +1342,7 @@ def page_rfx():
                         zip_bytes = _build_zip([{"filename": d["filename"], "bytes": d["bytes"]} for d in docs])
                         st.download_button("\U0001f4e6  Download All (ZIP)", data=zip_bytes,
                             file_name="RFQ_documents.zip", mime="application/zip",
-                            width="stretch", key="rfx_dl_all")
+                            use_container_width=True, key="rfx_dl_all")
                     for d in docs:
                         st.download_button(f"\u2b07 {d['filename']} — {d['vendor_name']}",
                             data=d["bytes"], file_name=d["filename"], mime=XLSX_MIME,
@@ -1328,7 +1375,7 @@ def page_rfx():
                             d = rfx.get_item_master_defaults(r["mat_code"])
                             rows.append({"RFP": r["rfp_number"], "Description": r["mat_desc"],
                                         "Qty": r["total_qty"], "List Price": d["price"] or 0.0})
-                        edited = st.data_editor(pd.DataFrame(rows), width="stretch", hide_index=True,
+                        edited = st.data_editor(pd.DataFrame(rows), use_container_width=True, hide_index=True,
                             column_config={
                                 "RFP": st.column_config.TextColumn(disabled=True),
                                 "Description": st.column_config.TextColumn(disabled=True, width=220),
@@ -1365,7 +1412,7 @@ def page_rfx():
                 rows = [{"RFP": r["rfp_number"], "Description": r["mat_desc"], "UOM": r["uom"],
                          "Qty": r["total_qty"], "Price": None, "Lead Time (d)": None, "MOQ": 1,
                          "Notes": ""} for r in pending_lines]
-                edited = st.data_editor(pd.DataFrame(rows), width="stretch", hide_index=True,
+                edited = st.data_editor(pd.DataFrame(rows), use_container_width=True, hide_index=True,
                     column_config={
                         "RFP": st.column_config.TextColumn(disabled=True),
                         "Description": st.column_config.TextColumn(disabled=True, width=220),
@@ -1378,13 +1425,13 @@ def page_rfx():
 
                 c1, c2 = st.columns(2)
                 with c1:
-                    if st.button("\U0001f3b2  Simulate Response (Demo)", width="stretch", key="rfx_sim2"):
+                    if st.button("\U0001f3b2  Simulate Response (Demo)", use_container_width=True, key="rfx_sim2"):
                         rfx.simulate_quotes_batch(pending_lines, vid)
                         st.cache_data.clear()
                         st.success(f"Simulated {len(pending_lines)} line(s) for {vname}.")
                         st.rerun()
                 with c2:
-                    if st.button("\U0001f4be  Save Quotes", type="primary", width="stretch", key="rfx_save2"):
+                    if st.button("\U0001f4be  Save Quotes", type="primary", use_container_width=True, key="rfx_save2"):
                         line_quotes = []
                         for _, row in edited.iterrows():
                             if row["Price"] is not None and float(row["Price"]) > 0:
@@ -1444,7 +1491,7 @@ def page_rfx():
             else:
                 bulk_df = pd.DataFrame(bulk_rows)
                 edited_bulk = st.data_editor(
-                    bulk_df.drop(columns=["_quote_id"]), width="stretch", hide_index=True,
+                    bulk_df.drop(columns=["_quote_id"]), use_container_width=True, hide_index=True,
                     column_config={
                         "Award": st.column_config.CheckboxColumn(width=60),
                         "RFP": st.column_config.TextColumn(disabled=True),
@@ -1487,7 +1534,7 @@ def page_rfx():
                         show = qdf[["vendor_id","vendor_name","price","lead_time","moq"]].rename(
                             columns={"vendor_id":"Vendor","vendor_name":"Name","price":"Price (\u20b9)",
                                      "lead_time":"Lead (d)","moq":"MOQ"})
-                        st.dataframe(show, width="stretch", hide_index=True)
+                        st.dataframe(show, use_container_width=True, hide_index=True)
                         st.bar_chart(qdf.set_index("vendor_id")["price"], height=160)
 
                         best = min(quotes, key=lambda q: q["price"])
@@ -1516,7 +1563,7 @@ def page_rfx():
                     rows = [{"RFP": r["rfp_number"], "Description": r["mat_desc"],
                              "Qty": r["total_qty"], "Price": w["price"], "Lead (d)": w["lead_time"]}
                             for r, w in g["pairs"]]
-                    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
             also_contract = st.checkbox(
                 "\U0001f4dc Also lock these into rate contracts (recommended for repeat items)",
@@ -1536,7 +1583,7 @@ def page_rfx():
 
             btn_label = (f"\U0001f4dc  Issue {len(preview)} PO(s) & Create Contracts" if also_contract
                         else f"\U0001f3c6  Issue {len(preview)} Consolidated PO(s)")
-            if st.button(btn_label, type="primary", width="stretch", key="rfx_issue"):
+            if st.button(btn_label, type="primary", use_container_width=True, key="rfx_issue"):
                 try:
                     if also_contract:
                         results = ct.award_rfx_to_contracts(ct_start, ct_end, ct_terms,
@@ -1588,7 +1635,7 @@ def page_rfx():
                     st.cache_data.clear()
                 except Exception:
                     st.error("\u274c Issuing POs failed:")
-                    st.caption("Technical details hidden.")
+                    st.code(traceback.format_exc())
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1620,7 +1667,7 @@ def page_vendor_onboarding():
             show_cols = ["Vendor_ID", "Vendor_Name", "Vendor_Type", "City", "Country", "GSTIN", "PAN",
                          "Active", "Onboarding_Status", "KYC_Flag"]
             show_cols = [c for c in show_cols if c in vdf.columns]
-            st.dataframe(vdf[show_cols], width="stretch", hide_index=True)
+            st.dataframe(vdf[show_cols], use_container_width=True, hide_index=True)
 
             pending = [v for v in vendors if v.get("Onboarding_Status") == "Format Verified"]
             if pending:
@@ -1680,7 +1727,7 @@ def page_vendor_onboarding():
             bank_branch = st.text_input("Bank Branch", value=st.session_state.get("vo_bank_branch", ""), key="vo_bbranch")
 
         st.markdown("")
-        if st.button("\u2705  Validate & Save Vendor", type="primary", width="stretch", key="vo_save"):
+        if st.button("\u2705  Validate & Save Vendor", type="primary", use_container_width=True, key="vo_save"):
             if not vid or not vname:
                 st.error("Vendor ID and Vendor Name are required.")
             else:
@@ -1703,7 +1750,7 @@ def page_vendor_onboarding():
                                   "flagged field(s) above and save again.")
                 except Exception:
                     st.error("\u274c Error saving vendor:")
-                    st.caption("Technical details hidden.")
+                    st.code(traceback.format_exc())
 
         if vendors:
             st.divider()
@@ -1730,7 +1777,7 @@ def page_vendor_onboarding():
             docs = vo.get_documents()
             if docs:
                 with st.expander(f"\U0001f4c1 {len(docs)} document(s) logged"):
-                    st.dataframe(pd.DataFrame(docs), width="stretch", hide_index=True)
+                    st.dataframe(pd.DataFrame(docs), use_container_width=True, hide_index=True)
 
     # ── TAB 2 — Vendor Registration Questionnaire ────────────────────────────────
     with tab2:
@@ -1775,7 +1822,7 @@ def page_vendor_onboarding():
         else:
             rdf = pd.DataFrame(requests)[["vrq_id","vendor_name","contact_email","sent_date","status","vendor_id"]]
             rdf.columns = ["VRQ ID","Vendor Name","Email","Sent","Status","Linked Vendor ID"]
-            st.dataframe(rdf, width="stretch", hide_index=True)
+            st.dataframe(rdf, use_container_width=True, hide_index=True)
 
             labels = {r["vrq_id"]: f"{r['vrq_id']} — {r['vendor_name']} ({r['status']})" for r in requests}
             sel = st.selectbox("Work on", list(labels.keys()), format_func=lambda k: labels[k], key="vrq_sel")
@@ -1810,7 +1857,7 @@ def page_vendor_onboarding():
                 rows = [{"Section": vrq._ALL_QUESTIONS.get(k,{}).get("section",""),
                          "Question": vrq._ALL_QUESTIONS.get(k,{}).get("text", k),
                          "Answer": v} for k, v in responses.items()]
-                st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
                 checks = vrq.validate_responses(sel)
                 issues = {k: c for k, c in checks.items() if not c["ok"]}
@@ -1838,7 +1885,7 @@ def page_vendor_onboarding():
                                 st.rerun()
                             except Exception:
                                 st.error("\u274c Promotion failed:")
-                                st.caption("Technical details hidden.")
+                                st.code(traceback.format_exc())
                 with c2:
                     st.markdown("")
                     st.markdown("")
@@ -1880,7 +1927,7 @@ def page_purchase_bundles():
             bdf = pd.DataFrame(bundles)[["bundle_id", "bundle_name", "department",
                                          "created_by", "created_date", "active"]]
             bdf.columns = ["Bundle ID", "Name", "Department", "Created By", "Created", "Active"]
-            st.dataframe(bdf, width="stretch", hide_index=True)
+            st.dataframe(bdf, use_container_width=True, hide_index=True)
 
             labels = {b["bundle_id"]: f"{b['bundle_name']}" +
                      (f"  ({b['department']})" if b["department"] else "") +
@@ -1897,7 +1944,7 @@ def page_purchase_bundles():
                 if items:
                     idf = pd.DataFrame(items)[["mat_code", "mat_desc", "uom", "default_qty", "notes"]]
                     idf.columns = ["Code", "Description", "UOM", "Default Qty", "Notes"]
-                    st.dataframe(idf, width="stretch", hide_index=True)
+                    st.dataframe(idf, use_container_width=True, hide_index=True)
                 else:
                     st.caption("No line items.")
 
@@ -1964,7 +2011,7 @@ def page_purchase_bundles():
             q = st.text_input("Search catalog", key="bdl_new_q", label_visibility="collapsed",
                               placeholder="Type then click Search")
         with s2:
-            do_search = st.button("\U0001f50d Search", key="bdl_new_sbtn", width="stretch")
+            do_search = st.button("\U0001f50d Search", key="bdl_new_sbtn", use_container_width=True)
 
         if do_search and len(q) >= 2:
             st.session_state.bdl_new_results = po_export.fuzzy_search(q, load_catalog(), max_results=15)
@@ -1991,7 +2038,7 @@ def page_purchase_bundles():
             st.markdown("##### \U0001f4cb Staged Items")
             sdf = pd.DataFrame(st.session_state.bdl_new_staged)[["mat_code", "desc", "uom", "qty"]]
             sdf.columns = ["Code", "Description", "UOM", "Qty"]
-            st.dataframe(sdf, width="stretch", hide_index=True)
+            st.dataframe(sdf, use_container_width=True, hide_index=True)
             to_rm = st.multiselect("Remove staged item(s)",
                                    [i["mat_code"] for i in st.session_state.bdl_new_staged],
                                    key="bdl_new_rm")
@@ -2001,7 +2048,7 @@ def page_purchase_bundles():
                 st.rerun()
 
         st.divider()
-        if st.button("\u2705 Create Bundle", type="primary", width="stretch",
+        if st.button("\u2705 Create Bundle", type="primary", use_container_width=True,
                      disabled=not (new_name.strip() and st.session_state.bdl_new_staged),
                      key="bdl_new_create"):
             try:
@@ -2091,7 +2138,7 @@ def page_contracts():
                 "start_date","end_date","payment_terms","delivery_sla_days","auto_renew"]]
             cdf.columns = ["Contract","Vendor ID","Vendor","Status","Start","End",
                           "Payment Terms","SLA (d)","Auto-Renew"]
-            st.dataframe(cdf, width="stretch", hide_index=True)
+            st.dataframe(cdf, use_container_width=True, hide_index=True)
 
             labels = {c["contract_id"]: f"{c['contract_id']} — {c['vendor_name']} ({c['status']})"
                       for c in contracts}
@@ -2105,7 +2152,7 @@ def page_contracts():
                 idf = pd.DataFrame(items)[["mat_code","mat_desc","uom","unit_price",
                     "min_order_qty","lead_time_days"]]
                 idf.columns = ["Code","Description","UOM","Unit Price","MOQ","Lead (d)"]
-                st.dataframe(idf, width="stretch", hide_index=True)
+                st.dataframe(idf, use_container_width=True, hide_index=True)
                 total_potential = sum(i["unit_price"] for i in items)
                 st.caption(f"Source PO: {contract['source_po']}  \u00b7  "
                           f"{len(items)} line(s)  \u00b7  Sum of unit prices: \u20b9{total_potential:,.2f}")
@@ -2177,7 +2224,7 @@ def page_contracts():
                         st.rerun()
                     except Exception:
                         st.error("\u274c Contract creation failed:")
-                        st.caption("Technical details hidden.")
+                        st.code(traceback.format_exc())
 
 
 # ── Router ─────────────────────────────────────────────────────────────────────

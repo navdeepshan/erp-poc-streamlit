@@ -151,15 +151,42 @@ def get_bom_matched_open_sales_orders(data_file=None):
     fpath = data_file or DATA_FILE
     import sales_order as so
     import org_defaults as od
+    import backorder
     all_items_mode = od.get_default("Demand Detection Mode", fpath) == "All Items"
     parents = None if all_items_mode else {fg["code"] for fg in get_finished_goods(fpath)}
     out = []
     for order in so.get_orders(status="Confirmed", data_file=fpath):
         for item in so.get_order_items(order["so_id"], fpath):
             if all_items_mode or item["mat_code"] in parents:
+                # Reservation Visibility to Planning (ATP-US-01's own default
+                # policy): a line's real demand for planning purposes is its
+                # own genuinely still-open shortfall, not its full original
+                # quantity or a stale snapshot of the shortfall. Reads the
+                # real, live Backorder's own open_qty (ATP-US-03 actively
+                # maintains this on every real supply arrival) rather than
+                # this line's own static backordered_qty column, which is
+                # set once at ATP-US-01's initial check and never revisited
+                # -- a real bug found and fixed here directly: without this,
+                # a Backorder already Partially Fulfilled by a real transfer
+                # or GR would still count its full original shortfall as
+                # open demand, double-counting the portion that already
+                # arrived. A Cancelled or Fulfilled Backorder correctly
+                # contributes zero. Falls back to the full quantity for a
+                # pre-ATP order (atp_outcome is None -- created before this
+                # policy existed, or by a caller that doesn't run the ATP
+                # check), preserving this function's own original behavior
+                # for those.
+                if item.get("atp_outcome") is None:
+                    demand_qty = item["qty"]
+                elif item.get("backorder_id"):
+                    live_bo = backorder.get_backorder(item["backorder_id"])
+                    demand_qty = (live_bo["open_qty"] if live_bo and
+                                 live_bo["status"] in ("Open", "Partially Fulfilled") else 0)
+                else:
+                    demand_qty = 0
                 out.append({"so_id": order["so_id"], "customer_name": order["customer_name"],
                            "mat_code": item["mat_code"], "mat_desc": item["mat_desc"],
-                           "qty": item["qty"], "delivery_location": order["delivery_location"],
+                           "qty": demand_qty, "delivery_location": order["delivery_location"],
                            "delivery_geo": order["delivery_geo"],
                            "requested_delivery_date": order["requested_delivery_date"]})
     return out
@@ -222,15 +249,33 @@ def get_inventory_position(data_file=None):
         key = (t["material_code"], t["to_location"])
         in_transit_by_key[key] = in_transit_by_key.get(key, 0) + (t["quantity"] or 0)
 
+    # Reservation Visibility to Planning (ATP-US-01's own default policy),
+    # supply side: real, currently-Open reservations at each (material,
+    # location) genuinely aren't free for a different demand to net
+    # against, even though they're still physically on-hand -- the same
+    # real reasoning Available-to-Promise itself already uses
+    # (reservation.get_available_to_promise()), applied here too so
+    # planning's own on_hand figure agrees with it rather than
+    # contradicting it.
+    import reservation as res
+    reserved_by_key = {}
+    for r in res.get_open_reservations():
+        key = (r["material_code"], r["location_id"])
+        reserved_by_key[key] = reserved_by_key.get(key, 0) + (r["quantity"] or 0)
+
     out = []
     for (mat_code, loc), gross in demand.items():
-        on_hand = max(0.0, balance_by_key.get((mat_code, loc), 0.0))
+        on_hand_raw = max(0.0, balance_by_key.get((mat_code, loc), 0.0))
+        reserved = reserved_by_key.get((mat_code, loc), 0.0)
+        on_hand = max(0.0, on_hand_raw - reserved)
         open_po = open_exposure.get(mat_code, 0)
         in_transit = in_transit_by_key.get((mat_code, loc), 0.0)
         net = max(0, gross - on_hand - open_po - in_transit)
-        elsewhere = [{"location_id": b["location_id"], "balance": b["balance"]}
+        elsewhere = [{"location_id": b["location_id"],
+                     "balance": max(0.0, b["balance"] - reserved_by_key.get((mat_code, b["location_id"]), 0.0))}
                     for b in all_balances if b["mat_code"] == mat_code and b["location_id"] != loc
                     and b["balance"] > 0]
+        elsewhere = [e for e in elsewhere if e["balance"] > 0]
         out.append({"mat_code": mat_code, "mat_desc": catalog.get(mat_code, {}).get("desc", mat_code),
                     "location_id": loc, "gross_demand": gross, "on_hand": on_hand,
                     "open_po": open_po, "in_transit": in_transit, "net_position": net,

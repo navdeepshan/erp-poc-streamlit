@@ -412,11 +412,79 @@ CREATE TABLE IF NOT EXISTS stock_transfers (
     shipped_by     TEXT,
     received_date  TEXT,
     received_by    TEXT,
+    received_qty   REAL,
+    discrepancy_type  TEXT,
+    discrepancy_notes TEXT,
+    gl_goods_value REAL,
+    gl_igst_amount REAL,
+    cancelled_date TEXT,
+    cancelled_by   TEXT,
+    source_type    TEXT DEFAULT 'Ad Hoc',
+    source_doc     TEXT,
+    eway_bill_number TEXT,
+    eway_bill_valid_until TEXT,
     carrier        TEXT,
     tracking_ref   TEXT,
     notes          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_txn_reference         ON inventory_transactions(reference_id);
+
+CREATE TABLE IF NOT EXISTS sto_header (
+    sto_id         TEXT PRIMARY KEY,
+    material_code  TEXT,
+    material_desc  TEXT,
+    hub_location   TEXT,
+    total_qty      REAL,
+    allocation_rule TEXT,
+    created_date   TEXT,
+    created_by     TEXT,
+    notes          TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sto_lines (
+    sto_id         TEXT,
+    line_no        INTEGER,
+    to_location    TEXT,
+    requested_qty  REAL,
+    allocated_qty  REAL,
+    transfer_id    TEXT,
+    PRIMARY KEY (sto_id, line_no)
+);
+CREATE INDEX IF NOT EXISTS idx_sto_lines_sto ON sto_lines(sto_id);
+
+CREATE TABLE IF NOT EXISTS reservations (
+    reservation_id    TEXT PRIMARY KEY,
+    material_code     TEXT,
+    material_desc     TEXT,
+    location_id       TEXT,
+    quantity          REAL,
+    so_id             TEXT,
+    so_line_item      INTEGER,
+    status            TEXT DEFAULT 'Open',
+    created_date      TEXT,
+    resolved_date     TEXT,
+    resolution_type   TEXT,
+    resolution_notes  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reservations_matloc ON reservations(material_code, location_id);
+CREATE INDEX IF NOT EXISTS idx_reservations_so ON reservations(so_id);
+
+CREATE TABLE IF NOT EXISTS backorders (
+    backorder_id      TEXT PRIMARY KEY,
+    material_code     TEXT,
+    material_desc     TEXT,
+    location_id       TEXT,
+    original_qty      REAL,
+    open_qty          REAL,
+    so_id             TEXT,
+    so_line_item      INTEGER,
+    status            TEXT DEFAULT 'Open',
+    created_date      TEXT,
+    resolved_date     TEXT,
+    resolution_notes  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_backorders_matloc ON backorders(material_code, location_id);
+CREATE INDEX IF NOT EXISTS idx_backorders_so ON backorders(so_id);
 
 CREATE TABLE IF NOT EXISTS plant_pair_lead_time_estimates (
     from_location  TEXT NOT NULL,
@@ -572,7 +640,12 @@ CREATE TABLE IF NOT EXISTS sales_order_items (
     uom           TEXT,
     qty           REAL,
     unit_price    REAL,
-    line_total    REAL
+    line_total    REAL,
+    atp_outcome      TEXT,
+    promised_qty     REAL,
+    backordered_qty  REAL,
+    reservation_id   TEXT,
+    backorder_id     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_soitems_so ON sales_order_items(so_id);
 
@@ -824,6 +897,38 @@ def init_schema(db_file=None):
         _add_column_if_missing(conn, "po_header", "po_date", "TEXT")
         _add_column_if_missing(conn, "customer_master", "default_delivery_location", "TEXT")
         _add_column_if_missing(conn, "item_master", "weight_kg", "REAL")
+        _add_column_if_missing(conn, "stock_transfers", "cancelled_date", "TEXT")
+        _add_column_if_missing(conn, "stock_transfers", "cancelled_by", "TEXT")
+        _add_column_if_missing(conn, "stock_transfers", "received_qty", "REAL")
+        _add_column_if_missing(conn, "stock_transfers", "discrepancy_type", "TEXT")
+        _add_column_if_missing(conn, "stock_transfers", "discrepancy_notes", "TEXT")
+        # DEFAULT is specified here, not just "TEXT" -- a column added via
+        # ALTER TABLE only gets a real SQLite-level default if the ALTER
+        # statement itself says so; the schema string's own "DEFAULT
+        # 'Ad Hoc'" above only applies when a table is created fresh via
+        # that exact CREATE TABLE statement, not to a column added later
+        # via migration. Found this directly: an ad hoc ship on an
+        # already-migrated database was inserting NULL for source_type
+        # instead of 'Ad Hoc', since the earlier migration call here only
+        # said "TEXT" with no default at all.
+        added_source_type = _add_column_if_missing(conn, "stock_transfers", "source_type",
+                                                    "TEXT DEFAULT 'Ad Hoc'")
+        if added_source_type:
+            # A migrated database's existing rows would otherwise be NULL here,
+            # not 'Ad Hoc' — every transfer that existed before this column did
+            # was genuinely an ad hoc one (STOs didn't exist yet either), so
+            # this is a real, correct backfill, not a guess.
+            conn.execute("UPDATE stock_transfers SET source_type='Ad Hoc' WHERE source_type IS NULL")
+        _add_column_if_missing(conn, "stock_transfers", "source_doc", "TEXT")
+        _add_column_if_missing(conn, "stock_transfers", "eway_bill_number", "TEXT")
+        _add_column_if_missing(conn, "stock_transfers", "eway_bill_valid_until", "TEXT")
+        _add_column_if_missing(conn, "stock_transfers", "gl_goods_value", "REAL")
+        _add_column_if_missing(conn, "stock_transfers", "gl_igst_amount", "REAL")
+        _add_column_if_missing(conn, "sales_order_items", "atp_outcome", "TEXT")
+        _add_column_if_missing(conn, "sales_order_items", "promised_qty", "REAL")
+        _add_column_if_missing(conn, "sales_order_items", "backordered_qty", "REAL")
+        _add_column_if_missing(conn, "sales_order_items", "reservation_id", "TEXT")
+        _add_column_if_missing(conn, "sales_order_items", "backorder_id", "TEXT")
         # None of these backfills are gated on their column having just
         # been added — a row with a NULL value can in principle turn up
         # later too (anything that ever inserts without going through

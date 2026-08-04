@@ -27,6 +27,8 @@ from datetime import date
 import db
 import po_export
 import shipping
+import sto
+import reservation as res
 import pr_consolidation
 import goods_receipt as gr
 import quality_inspection as qi
@@ -36,7 +38,6 @@ import inventory as inv
 import production as prod
 import accounting as acct
 import vendor_invoices as vi
-from ui_theme import apply_theme, embed_html
 
 def load_delivery_locs():
     """Delivery_Locations now lives in SQLite — delegates to
@@ -51,14 +52,18 @@ _DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(_DIR, "data.xlsx")
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-# Page configuration and the shared theme are owned by streamlit_app.py.
+st.set_page_config(page_title="Manufacturing", page_icon="\U0001f527", layout="wide")
+
+from ui_theme import apply_theme
+apply_theme()
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown('<div class="erp-section-label">MANUFACTURING</div>', unsafe_allow_html=True)
+    st.markdown("### \U0001f527 ERP Suite")
+    st.caption("Manufacturing")
     st.divider()
-    page = st.radio("Manufacturing section", ["\U0001f4e5  Goods Receipt",
+    page = st.radio("", ["\U0001f4e5  Goods Receipt",
                          "\U0001f50e  Quality Inspection",
                          "\U0001f9e9  BOM & Explosion",
                          "\U0001f3ed  Production",
@@ -72,11 +77,10 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 def page_goods_receipt():
     st.markdown("## \U0001f4e5 Goods Receipt")
-    st.caption("Deliberately lightweight — a full receiving system already exists "
-               "outside this PoC. This gives Three-Way Match and Quality Inspection "
-               "a real event to anchor to: genuine received quantities, tracked "
-               "separately from ordered quantities, with honest partial receipt "
-               "across one or more GRs against the same PO.")
+    st.caption("Captures received quantities separately from ordered quantities, "
+               "supporting partial receipt across one or more Goods Receipts against "
+               "the same PO. This is the event Three-Way Match and Quality Inspection "
+               "both rely on.")
     st.divider()
 
     s = gr.stats()
@@ -187,10 +191,10 @@ def page_goods_receipt():
                     except Exception:
                         st.warning("\u26a0\ufe0f Goods receipt recorded, but the accounting "
                                   "entry failed to post:")
-                        st.caption("Technical details hidden.")
+                        st.code(traceback.format_exc())
                 except Exception:
                     st.error("\u274c Error creating goods receipt:")
-                    st.caption("Technical details hidden.")
+                    st.code(traceback.format_exc())
 
     # ── TAB 2 — view and manage existing GRs ──────────────────────────────────────
     with tab2:
@@ -200,7 +204,7 @@ def page_goods_receipt():
         else:
             gdf = pd.DataFrame(grs)[["gr_id","po_number","vendor_name","status","gr_date"]]
             gdf.columns = ["GR","PO","Vendor","Status","Date"]
-            st.dataframe(gdf, width="stretch", hide_index=True)
+            st.dataframe(gdf, use_container_width=True, hide_index=True)
 
             labels = {g["gr_id"]: f"{g['gr_id']} — {g['po_number']} ({g['status']})" for g in grs}
             sel = st.selectbox("Work on", list(labels.keys()), format_func=lambda k: labels[k], key="gr_work_sel")
@@ -212,7 +216,7 @@ def page_goods_receipt():
                 st.markdown("##### \U0001f4c4 Line Items")
                 idf = pd.DataFrame(items)[["mat_code","mat_desc","uom","po_qty","qty_received"]]
                 idf.columns = ["Code","Description","UOM","PO Qty","Received"]
-                st.dataframe(idf, width="stretch", hide_index=True)
+                st.dataframe(idf, use_container_width=True, hide_index=True)
                 st.caption(f"Vendor: {g['vendor_name']}  \u00b7  Received by: {g['received_by'] or 'n/a'}")
 
             with right:
@@ -256,8 +260,8 @@ def page_goods_receipt():
                         c2.metric("GST Input", f"\u20b9{gst_total:,.2f}")
                         st.caption(f"**Total: \u20b9{amounts['total']:,.2f}** — computed from "
                                   "the GR's own items, not editable here. A vendor invoice "
-                                  "differing from this would be a price variance, which this "
-                                  "PoC doesn't model.")
+                                  "differing from this would represent a price variance, "
+                                  "which isn't tracked here.")
                         if st.button("\U0001f9fe Simulate Invoice", key=f"vi_create_{sel}"):
                             try:
                                 invoice_id = vi.create_invoice(sel, invoice_number=inv_no)
@@ -294,11 +298,11 @@ def page_goods_receipt():
 # ══════════════════════════════════════════════════════════════════════════════
 def page_quality_inspection():
     st.markdown("## \U0001f50e Quality Inspection")
-    st.caption("Record-only — never blocks GR, never blocks anything else. This exists "
-               "to give a payment-proposal system (outside this PoC's scope) a warning "
-               "gate to check, not to enforce anything itself. 'Not yet inspected' and "
-               "'failed' are tracked as separate flags on purpose — very different "
-               "weight for whoever reads this downstream.")
+    st.caption("Record-only — inspection results here never block Goods Receipt or "
+               "anything else. They provide a warning signal for a payment-proposal "
+               "process to check before release, not an enforcement gate. 'Not yet "
+               "inspected' and 'Failed' are tracked as distinct statuses, since they "
+               "carry very different weight for downstream review.")
     st.divider()
 
     s = qi.stats()
@@ -377,7 +381,7 @@ def page_quality_inspection():
             lines = qi.get_gr_quality_status(sel)
             ldf = pd.DataFrame(lines)[["mat_code","mat_desc","qty_received","qty_passed","qty_failed","status"]]
             ldf.columns = ["Code","Description","Received","Passed","Failed","Status"]
-            st.dataframe(ldf, width="stretch", hide_index=True)
+            st.dataframe(ldf, use_container_width=True, hide_index=True)
 
             gen_clicked = st.button("\U0001f4c4 Generate Inspection Report", key="qi_gen_doc")
             if gen_clicked:
@@ -495,7 +499,7 @@ def page_bom():
             if lines:
                 ldf = pd.DataFrame(lines)[["mat_code","mat_desc","gross_qty","on_hand_qty","open_po_qty","net_qty"]]
                 ldf.columns = ["Code","Description","Gross Qty","On Hand","Open PO Qty","Net to Requisition"]
-                st.dataframe(ldf, width="stretch", hide_index=True)
+                st.dataframe(ldf, use_container_width=True, hide_index=True)
             else:
                 st.success("\u2705 Nothing to requisition — fully covered by on-hand stock and open POs.")
 
@@ -523,7 +527,7 @@ def page_bom():
                               "Head to Consolidate on the S2P app to route them.")
                 except Exception:
                     st.error("\u274c Error proposing PR:")
-                    st.caption("Technical details hidden.")
+                    st.code(traceback.format_exc())
 
     # ── TAB 2 — view a BOM tree ───────────────────────────────────────────────────
     with tab2:
@@ -537,7 +541,7 @@ def page_bom():
             children = bom.get_bom(sel)
             cdf = pd.DataFrame(children)[["component_code","component_desc","qty_per","uom"]]
             cdf.columns = ["Component","Description","Qty Per Unit","UOM"]
-            st.dataframe(cdf, width="stretch", hide_index=True)
+            st.dataframe(cdf, use_container_width=True, hide_index=True)
             st.caption("Direct children only — components with their own BOM (sub-assemblies) "
                       "can be selected above too, to drill into their own components.")
 
@@ -659,7 +663,7 @@ d.innerHTML="<b style='font-size:11px;color:#6B7280;text-transform:uppercase'>Le
 return d;}};
 leg.addTo(map);
 </script></body></html>"""
-    embed_html(html, height=460)
+    st.components.v1.html(html, height=460)
     st.caption("Line thickness scales with suggested transfer quantity \u00b7 "
               "click a route for the material breakdown \u00b7 **Fit** re-frames the map.")
 
@@ -747,7 +751,7 @@ def _material_flow_svg(vendor_label, vendor_sub, from_name, stays_qty, destinati
 
 <text class="mf-ts" x="340" y="{viewbox_h-16:g}" text-anchor="middle">Gray = received or held \u00b7 amber = suggested transfer</text>
 </svg></div>"""
-    embed_html(svg, height=viewbox_h + 26)
+    st.components.v1.html(svg, height=viewbox_h + 26)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -755,11 +759,9 @@ def _material_flow_svg(vendor_label, vendor_sub, from_name, stays_qty, destinati
 # ══════════════════════════════════════════════════════════════════════════════
 def page_inventory():
     st.markdown("## \U0001f4e6 Inventory")
-    st.caption("Transaction-based — every balance below is computed live by summing "
-               "history, never stored separately. Goods Receipt and Production "
-               "Confirmation both post here; O2C Fulfillment shipments still aren't "
-               "wired to decrease stock in this ledger — a real, stated gap, not the "
-               "whole picture yet.")
+    st.caption("Transaction-based — every balance below is computed live from "
+               "transaction history, not stored separately. Goods Receipt, Production "
+               "Confirmation, and O2C Fulfillment shipments all post here.")
     st.divider()
 
     s = inv.stats()
@@ -797,8 +799,18 @@ def page_inventory():
                     "Balance": t["quantity"], "Status": "In Transit",
                 } for t in in_transit])
                 bdf = pd.concat([bdf, tdf], ignore_index=True)
+            open_reservations = res.get_all_reservations()
+            open_reservations = [r for r in open_reservations if r["status"] == "Open"]
+            if open_reservations:
+                loc_name = {l["id"]: l["name"] for l in pr_consolidation.get_delivery_locations(active_only=False)}
+                rdf = pd.DataFrame([{
+                    "Code": r["material_code"], "Description": r["material_desc"],
+                    "Location": loc_name.get(r["location_id"], r["location_id"]),
+                    "Balance": r["quantity"], "Status": "Reserved",
+                } for r in open_reservations])
+                bdf = pd.concat([bdf, rdf], ignore_index=True)
             st.dataframe(bdf[["Code","Description","Location","Balance","Status"]],
-                        width="stretch", hide_index=True)
+                        use_container_width=True, hide_index=True)
 
             gen_clicked = st.button("\U0001f4c4 Generate Stock Report", key="inv_gen_doc")
             if gen_clicked:
@@ -808,6 +820,34 @@ def page_inventory():
             if gd:
                 st.download_button(f"\u2b07 Download {gd['filename']}", data=gd["bytes"],
                     file_name=gd["filename"], mime=XLSX_MIME, key="inv_dl")
+
+            st.divider()
+            with st.expander("\U0001f512 Reservation Ledger (ATP-US-02)"):
+                st.caption("Real, currently-Open reservations \u2014 quantity spoken for "
+                          "against a Sales Order, decremented from Available-to-Promise "
+                          "at the material/location shown, until picked (Consumed) or "
+                          "released.")
+                if not open_reservations:
+                    st.caption("No open reservations right now.")
+                else:
+                    loc_name = {l["id"]: l["name"] for l in pr_consolidation.get_delivery_locations(active_only=False)}
+                    for r in open_reservations:
+                        c1, c2 = st.columns([4, 1.3])
+                        c1.write(f"**{r['reservation_id']}** \u2014 {r['material_desc']} \u00b7 "
+                                f"{r['quantity']:g} \u00b7 {loc_name.get(r['location_id'], r['location_id'])} "
+                                f"\u00b7 {r['so_id']} line {r['so_line_item']} \u00b7 "
+                                f"reserved {r['created_date']}")
+                        if c2.button("\U0001f513 Release", key=f"release_res_{r['reservation_id']}"):
+                            try:
+                                res.release_reservation(r["reservation_id"],
+                                    reason="Released manually from Reservation Ledger")
+                                st.cache_data.clear()
+                                st.success(f"\u2705 {r['reservation_id']} released \u2014 "
+                                          f"{r['quantity']:g} units returned to "
+                                          f"Available-to-Promise.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"\u274c {e}")
 
     # ── TAB 2 — drill into one material across locations ──────────────────────────
     with tab2:
@@ -833,7 +873,7 @@ def page_inventory():
                     ldf = pd.concat([ldf, pd.DataFrame([{
                         "Location": f"{dest} (In Transit)", "Balance": t["quantity"]}])],
                         ignore_index=True)
-            st.dataframe(ldf, width="stretch", hide_index=True)
+            st.dataframe(ldf, use_container_width=True, hide_index=True)
             c1, c2 = st.columns(2)
             c1.metric("Total on hand across all locations", f"{sum(b['balance'] for b in by_loc):g}")
             transit_total = sum(t["quantity"] for t in sel_in_transit)
@@ -850,7 +890,7 @@ def page_inventory():
             tdf = pd.DataFrame(txns)[["txn_id","txn_date","mat_code","location_name",
                                        "quantity","txn_type","reference_id"]]
             tdf.columns = ["Txn","Date","Material","Location","Qty","Type","Reference"]
-            st.dataframe(tdf, width="stretch", hide_index=True)
+            st.dataframe(tdf, use_container_width=True, hide_index=True)
 
     # ── TAB 4 — persistent demand vs. supply position + transfer suggestions ──────
     with tab4:
@@ -865,7 +905,8 @@ def page_inventory():
         # next render is the standard fix.
         flash = st.session_state.pop("tp_flash_message", None)
         if flash:
-            (st.success if flash[0] == "success" else st.error)(flash[1])
+            flash_fn = {"success": st.success, "warning": st.warning}.get(flash[0], st.error)
+            flash_fn(flash[1])
 
         st.caption("Demand here means confirmed, BOM-matched Sales Orders only — the "
                   "one real demand signal in this system right now. No forecasting, "
@@ -884,7 +925,7 @@ def page_inventory():
                                           "on_hand","open_po","net_position"]]
             pdf["location_id"] = pdf["location_id"].map(_lname)
             pdf.columns = ["Code","Description","Location","Demand","On Hand","Open PO","Net Position"]
-            st.dataframe(pdf, width="stretch", hide_index=True)
+            st.dataframe(pdf, use_container_width=True, hide_index=True)
 
             st.divider()
             st.markdown("##### \U0001f504 Cross-location transfer opportunities")
@@ -901,113 +942,202 @@ def page_inventory():
                 tdf["from_location"] = tdf["from_location"].map(_lname)
                 tdf["to_location"] = tdf["to_location"].map(_lname)
                 tdf.columns = ["Code","Description","From","To","Suggested Qty","Shortage at Destination"]
-                st.dataframe(tdf, width="stretch", hide_index=True)
+                st.dataframe(tdf, use_container_width=True, hide_index=True)
 
-                st.markdown("###### Ship")
-                st.caption("Ships real stock — the source location's balance drops "
-                          "immediately, but the destination doesn't receive it until "
-                          "someone confirms receipt below. Genuinely in transit in "
-                          "between, not silently teleported. The quantity is pre-filled "
-                          "with the suggestion (largest shortage served first when several "
-                          "destinations compete for the same source) but freely editable — "
-                          "shipping itself always re-checks real, current availability, "
-                          "so an edited quantity can't over-allocate the same stock twice.")
-                for i, t in enumerate(transfers):
-                    item_info = po_export.get_item_by_code(t["mat_code"], active_only=False)
-                    uom = item_info["uom"] if item_info else "pcs"
-                    # Stable, content-based key — not the loop index. A Ship action can
-                    # change which opportunities exist at all (e.g. draining a source
-                    # down to zero removes it from transfers entirely), which shifts
-                    # every index after it. A key built from the loop position alone
-                    # means the NEXT click can silently land on nothing: real bug found
-                    # 2026-07-30 — shipping two rows in sequence correctly moved stock
-                    # for the first, but the second click (whose index-based key no
-                    # longer matched anything once the list had changed shape) never
-                    # even reached ship_transfer() at all, not a validation failure,
-                    # just a lost click. row_key ties every widget for this specific
-                    # opportunity to what it actually is, immune to reordering.
-                    row_key = f"{t['mat_code']}_{t['from_location']}_{t['to_location']}"
-                    c1, c2, c3, c4 = st.columns([3.3, 1.3, 1.4, 1])
-                    c1.write(f"**{t['mat_desc']}** · {_lname(t['from_location'])} \u2192 "
-                            f"{_lname(t['to_location'])}")
-                    qty = c2.number_input(f"Qty ({uom})", min_value=0.0,
-                        max_value=float(t["available_at_source"]), value=float(t["suggested_qty"]),
-                        step=1.0, key=f"exec_qty_{row_key}", label_visibility="collapsed")
-                    courier = c3.selectbox("Courier", shipping.COURIERS,
-                        key=f"exec_courier_{row_key}", label_visibility="collapsed")
-                    if c4.button("Ship", key=f"exec_transfer_{row_key}"):
-                        try:
-                            result = inv.ship_transfer(t["mat_code"], t["mat_desc"],
-                                t["from_location"], t["to_location"], qty, carrier=courier)
-                            st.cache_data.clear()
-                            # Stored, not shown directly — a call to st.success() here
-                            # would never actually be seen, since st.rerun() right below
-                            # discards it before this frame is ever rendered. Displayed
-                            # at the top of this tab on the very next run instead.
-                            st.session_state["tp_flash_message"] = ("success",
-                                f"\u2705 {result['transfer_id']} — "
-                                f"{qty:g} {uom} shipped via {courier}, now in transit.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"\u274c {e}")
+                use_sto = od.get_default("Use Stock Transfer Orders") == "Yes"
+                if use_sto:
+                    st.markdown("###### \U0001f3ed Hub Allocation (Stock Transfer Order)")
+                    st.caption("Creates a Stock Transfer Order covering every Plant shown "
+                              "above for this material and Hub, generates an e-way bill "
+                              "where required (inter-state movement above the statutory "
+                              "value threshold), and posts the freight accrual. Allocation "
+                              "uses the same largest-shortage-first split shown above; a "
+                              "configurable approval step will be available in a future "
+                              "release.")
+                    sto_groups = {}
+                    for t in transfers:
+                        key = (t["mat_code"], t["from_location"])
+                        sto_groups.setdefault(key, []).append(t)
+                    for (mat_code, from_loc), group in sto_groups.items():
+                        mat_desc = group[0]["mat_desc"]
+                        destinations = ", ".join(_lname(g["to_location"]) for g in group)
+                        gc1, gc2 = st.columns([4, 1.3])
+                        gc1.write(f"**{mat_desc}** from {_lname(from_loc)} \u2192 {destinations}")
+                        if gc2.button("\U0001f3ed Create STO", key=f"create_sto_{mat_code}_{from_loc}"):
+                            try:
+                                result = sto.simple_allocate_and_create_sto(
+                                    mat_code, from_loc, created_by="ERP UI")
+                                st.cache_data.clear()
+                                legs = ", ".join(f"{_lname(l['to_location'])} "
+                                                f"({l['allocated_qty']:g})" for l in result["lines"])
+                                st.session_state["tp_flash_message"] = ("success",
+                                    f"\u2705 {result['sto_id']} created — {legs}. Real freight "
+                                    f"accrual posted; e-way bill generated for any inter-state "
+                                    f"leg above the real value threshold.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"\u274c {e}")
 
-
-                st.divider()
-                st.markdown("##### \U0001f9ee Drill into one material's flow")
-                st.caption("Every destination competing for the same material from the "
-                          "same source shows together in one diagram, not one diagram "
-                          "each — that's also what makes 'stays here' correct when more "
-                          "than one destination is drawing on the same stock.")
-
-                groups = {}
-                for t in transfers:
-                    groups.setdefault((t["mat_code"], t["from_location"]), []).append(t)
-                group_keys = list(groups.keys())
-                drill_labels = {}
-                for i, key in enumerate(group_keys):
-                    group = groups[key]
-                    dest_summary = ", ".join(f"{_lname(g['to_location'])} ({g['suggested_qty']:g})"
-                                             for g in group)
-                    drill_labels[i] = f"{group[0]['mat_desc']} — {_lname(key[1])} \u2192 {dest_summary}"
-                sel_i = st.selectbox("Material + source to trace", list(drill_labels.keys()),
-                    format_func=lambda k: drill_labels[k], key="inv_drill_sel")
-                mat_code, from_loc = group_keys[sel_i]
-                group = groups[(mat_code, from_loc)]
-
-                detail = bom.get_material_flow_detail(mat_code, from_loc)
-                total_suggested = sum(g["suggested_qty"] for g in group)
-                stays_qty = max(0.0, detail["on_hand"] - total_suggested)
-                if detail["vendors"]:
-                    vendor_label = detail["vendors"][0][0]
-                    vendor_sub = ("Supplier" if len(detail["vendors"]) == 1
-                                  else f"+ {len(detail['vendors'])-1} more supplier(s)")
                 else:
-                    vendor_label, vendor_sub = "Unknown source", "No GR on file"
-                item_info = po_export.get_item_by_code(mat_code, active_only=False)
-                vendor_short = vendor_label if len(vendor_label) <= 15 else vendor_label[:14] + "\u2026"
-                from_full = _lname(from_loc)
-                from_short = _lshort(from_loc)
-                from_short = from_short if len(from_short) <= 20 else from_short[:19] + "\u2026"
+                    st.markdown("###### Ship")
+                    st.caption("Ships real stock — the source location's balance drops "
+                              "immediately, but the destination doesn't receive it until "
+                              "someone confirms receipt below. Genuinely in transit in "
+                              "between, not silently teleported. The quantity is pre-filled "
+                              "with the suggestion (largest shortage served first when several "
+                              "destinations compete for the same source) but freely editable — "
+                              "shipping itself always re-checks real, current availability, "
+                              "so an edited quantity can't over-allocate the same stock twice. "
+                              "Select the lines to ship together and pick one courier for all "
+                              "of them — a later version can let an agent or an optimizer "
+                              "choose the best courier per line instead of one shared choice "
+                              "here; this is the manual baseline that unlocks.")
 
-                destinations, dest_captions = [], []
-                for g in group:
-                    to_full = _lname(g["to_location"])
-                    to_short = _lshort(g["to_location"])
-                    to_short = to_short if len(to_short) <= 20 else to_short[:19] + "\u2026"
-                    destinations.append({"name": to_short, "qty": g["suggested_qty"]})
-                    if to_short != to_full:
-                        dest_captions.append(f"{to_short} = {to_full}")
+                    row_keys = [f"{t['mat_code']}_{t['from_location']}_{t['to_location']}"
+                               for t in transfers]
 
-                _material_flow_svg(vendor_short, vendor_sub, from_short, stays_qty, destinations,
-                                   item_info["uom"] if item_info else "pcs")
-                captions = []
-                if vendor_short != vendor_label:
-                    captions.append(f"Supplier: {vendor_label}")
-                if from_short != from_full:
-                    captions.append(f"{from_short} = {from_full}")
-                captions.extend(dest_captions)
-                if captions:
-                    st.caption("  \u00b7  ".join(captions))
+                    def _select_all_ship(row_keys=row_keys):
+                        val = st.session_state["select_all_ship"]
+                        for rk in row_keys:
+                            st.session_state[f"chk_ship_{rk}"] = val
+
+                    sa1, sa2 = st.columns([1, 5])
+                    sa1.checkbox("Select All", key="select_all_ship",
+                                on_change=_select_all_ship)
+
+                    for i, t in enumerate(transfers):
+                        item_info = po_export.get_item_by_code(t["mat_code"], active_only=False)
+                        uom = item_info["uom"] if item_info else "pcs"
+                        # Stable, content-based key — not the loop index. A Ship action can
+                        # change which opportunities exist at all (e.g. draining a source
+                        # down to zero removes it from transfers entirely), which shifts
+                        # every index after it. A key built from the loop position alone
+                        # means the NEXT click can silently land on nothing: real bug found
+                        # 2026-07-30 — shipping two rows in sequence correctly moved stock
+                        # for the first, but the second click (whose index-based key no
+                        # longer matched anything once the list had changed shape) never
+                        # even reached ship_transfer() at all, not a validation failure,
+                        # just a lost click. row_key ties every widget for this specific
+                        # opportunity to what it actually is, immune to reordering.
+                        row_key = row_keys[i]
+                        c0, c1, c2 = st.columns([0.4, 3.9, 1.3])
+                        c0.checkbox("Select", key=f"chk_ship_{row_key}",
+                                   label_visibility="collapsed")
+                        c1.write(f"**{t['mat_desc']}** · {_lname(t['from_location'])} \u2192 "
+                                f"{_lname(t['to_location'])}")
+                        c2.number_input(f"Qty ({uom})", min_value=0.0,
+                            max_value=float(t["available_at_source"]), value=float(t["suggested_qty"]),
+                            step=1.0, key=f"exec_qty_{row_key}", label_visibility="collapsed")
+
+                    st.divider()
+                    st.caption("Courier for selected lines — 'Let system choose' leaves each "
+                              "leg open for a least-cost, route-consolidating recommendation "
+                              "at Submit to Courier time, rather than committing to one "
+                              "courier for the whole selection now.")
+                    bc1, bc2 = st.columns([1.5, 1])
+                    LEAST_COST_OPTION = "Let system choose (least cost)"
+                    courier_choice = bc1.selectbox("Courier for selected lines",
+                        [LEAST_COST_OPTION] + shipping.COURIERS,
+                        key="batch_courier_ship", label_visibility="collapsed")
+                    batch_courier = "" if courier_choice == LEAST_COST_OPTION else courier_choice
+                    if bc2.button("\U0001f69a Ship Selected", type="primary", key="ship_selected_btn"):
+                        selected = [(i, t) for i, t in enumerate(transfers)
+                                   if st.session_state.get(f"chk_ship_{row_keys[i]}")]
+                        if not selected:
+                            st.warning("No lines selected — check at least one row first.")
+                        else:
+                            shipped, failed = [], []
+                            for i, t in selected:
+                                row_key = row_keys[i]
+                                item_info = po_export.get_item_by_code(t["mat_code"], active_only=False)
+                                uom = item_info["uom"] if item_info else "pcs"
+                                qty = st.session_state.get(f"exec_qty_{row_key}", t["suggested_qty"])
+                                try:
+                                    result = inv.ship_transfer(t["mat_code"], t["mat_desc"],
+                                        t["from_location"], t["to_location"], qty, carrier=batch_courier)
+                                    shipped.append(f"{result['transfer_id']} ({qty:g} {uom})")
+                                except Exception as e:
+                                    failed.append(f"{t['mat_desc']}: {e}")
+                                # Real bug found and fixed here: assigning False to an
+                                # already-instantiated checkbox's own session_state key
+                                # (st.session_state[key] = False) raises — Streamlit
+                                # disallows modifying a widget's value in the same run
+                                # it was already rendered in. Deleting the key instead
+                                # is allowed and has the same practical effect: on the
+                                # next render (this whole block already ends in
+                                # st.rerun()) the checkbox reverts to its unchecked
+                                # default rather than the previously-set True.
+                                if f"chk_ship_{row_key}" in st.session_state:
+                                    del st.session_state[f"chk_ship_{row_key}"]
+                            st.cache_data.clear()
+                            msg_parts = []
+                            if shipped:
+                                courier_label = batch_courier if batch_courier else \
+                                    "no pinned courier — least-cost proposal at Submit to Courier"
+                                msg_parts.append(f"\u2705 Shipped, {courier_label}: " + ", ".join(shipped))
+                            if failed:
+                                msg_parts.append(f"\u274c Failed: " + "; ".join(failed))
+                            st.session_state["tp_flash_message"] = (
+                                "success" if not failed else "warning", "\n\n".join(msg_parts))
+                            st.rerun()
+
+
+                    st.divider()
+                    st.markdown("##### \U0001f9ee Drill into one material's flow")
+                    st.caption("Every destination competing for the same material from the "
+                              "same source shows together in one diagram, not one diagram "
+                              "each — that's also what makes 'stays here' correct when more "
+                              "than one destination is drawing on the same stock.")
+
+                    groups = {}
+                    for t in transfers:
+                        groups.setdefault((t["mat_code"], t["from_location"]), []).append(t)
+                    group_keys = list(groups.keys())
+                    drill_labels = {}
+                    for i, key in enumerate(group_keys):
+                        group = groups[key]
+                        dest_summary = ", ".join(f"{_lname(g['to_location'])} ({g['suggested_qty']:g})"
+                                                 for g in group)
+                        drill_labels[i] = f"{group[0]['mat_desc']} — {_lname(key[1])} \u2192 {dest_summary}"
+                    sel_i = st.selectbox("Material + source to trace", list(drill_labels.keys()),
+                        format_func=lambda k: drill_labels[k], key="inv_drill_sel")
+                    mat_code, from_loc = group_keys[sel_i]
+                    group = groups[(mat_code, from_loc)]
+
+                    detail = bom.get_material_flow_detail(mat_code, from_loc)
+                    total_suggested = sum(g["suggested_qty"] for g in group)
+                    stays_qty = max(0.0, detail["on_hand"] - total_suggested)
+                    if detail["vendors"]:
+                        vendor_label = detail["vendors"][0][0]
+                        vendor_sub = ("Supplier" if len(detail["vendors"]) == 1
+                                      else f"+ {len(detail['vendors'])-1} more supplier(s)")
+                    else:
+                        vendor_label, vendor_sub = "Unknown source", "No GR on file"
+                    item_info = po_export.get_item_by_code(mat_code, active_only=False)
+                    vendor_short = vendor_label if len(vendor_label) <= 15 else vendor_label[:14] + "\u2026"
+                    from_full = _lname(from_loc)
+                    from_short = _lshort(from_loc)
+                    from_short = from_short if len(from_short) <= 20 else from_short[:19] + "\u2026"
+
+                    destinations, dest_captions = [], []
+                    for g in group:
+                        to_full = _lname(g["to_location"])
+                        to_short = _lshort(g["to_location"])
+                        to_short = to_short if len(to_short) <= 20 else to_short[:19] + "\u2026"
+                        destinations.append({"name": to_short, "qty": g["suggested_qty"]})
+                        if to_short != to_full:
+                            dest_captions.append(f"{to_short} = {to_full}")
+
+                    _material_flow_svg(vendor_short, vendor_sub, from_short, stays_qty, destinations,
+                                       item_info["uom"] if item_info else "pcs")
+                    captions = []
+                    if vendor_short != vendor_label:
+                        captions.append(f"Supplier: {vendor_label}")
+                    if from_short != from_full:
+                        captions.append(f"{from_short} = {from_full}")
+                    captions.extend(dest_captions)
+                    if captions:
+                        st.caption("  \u00b7  ".join(captions))
 
             in_transit = inv.get_stock_transfers(status="In Transit")
             if in_transit:
@@ -1017,48 +1147,225 @@ def page_inventory():
                           "either location until confirmed here. Shown regardless of "
                           "whether any new transfer opportunities exist right now — a "
                           "shipment already on its way doesn't disappear just because "
-                          "everything else has been resolved.")
+                          "everything else has been resolved. Select the lines to act "
+                          "on, then either submit them to the courier or confirm "
+                          "they've genuinely arrived.")
+
+                @st.dialog("\U0001f4e6 Tracking Status (Simulated)")
+                def _show_tracking(transfer_id):
+                    status = shipping.get_tracking_status(transfer_id)
+                    if not status:
+                        st.write("No tracking information on file yet.")
+                        return
+                    st.caption("No real courier tracking API is called here — this is a "
+                              "deterministic simulation from the real ship date, not a "
+                              "live status.")
+                    st.markdown(f"**AWB {status['awb_number']}** \u2014 "
+                               f"*{status['current_status']}*")
+                    st.divider()
+                    for cp in status["checkpoints"]:
+                        icon = "\u2705" if cp["completed"] else "\u26aa"
+                        weight = "**" if cp["completed"] else ""
+                        st.markdown(f"{icon} {weight}{cp['label']}{weight} \u2014 "
+                                   f"{cp['location']} \u00b7 {cp['date']}")
+                    st.divider()
+                    if status["current_status"] != "Delivered":
+                        st.caption("Demo control \u2014 advances this simulation to its next "
+                                  "real checkpoint rather than waiting for real elapsed time.")
+                        if st.button("\u23e9 Skip Ahead", key=f"skip_ahead_{transfer_id}"):
+                            shipping.skip_ahead_tracking(transfer_id)
+                            st.rerun()
+
+                def _select_all_receive(transfer_ids=[t["transfer_id"] for t in in_transit]):
+                    val = st.session_state["select_all_receive"]
+                    for tid in transfer_ids:
+                        st.session_state[f"chk_receive_{tid}"] = val
+
+                ra1, ra2 = st.columns([1, 5])
+                ra1.checkbox("Select All", key="select_all_receive",
+                            on_change=_select_all_receive)
+
                 for t in in_transit:
-                    c1, c2, c3 = st.columns([4, 1, 1.4])
-                    # Button checked BEFORE the row's own text is written, and text is
-                    # only written if THIS run's receipt didn't succeed — deliberately
-                    # not "write the row, then maybe act on a click." Real bug found
-                    # 2026-07-30: st.rerun()'s effect (below) is not reliably visible
-                    # within the very same run that triggered it — confirmed directly,
-                    # not assumed: the row's own text was still present in this run's
-                    # output immediately after a successful receive_transfer() call,
-                    # and only disappeared on the *next* render, whatever triggered it.
-                    # Rather than depend on exactly when a rerun takes visible effect,
-                    # this ordering guarantees a successfully-received row is never
-                    # written into this run's output at all, so there's nothing stale
-                    # left behind regardless of rerun timing.
-                    clicked = c2.button("Confirm Receipt", key=f"receive_{t['transfer_id']}")
-                    received_now = False
-                    if clicked:
+                    c0, c1, c3, c4 = st.columns([0.4, 3.3, 1.1, 0.9])
+                    c0.checkbox("Select", key=f"chk_receive_{t['transfer_id']}",
+                               label_visibility="collapsed")
+                    c1.write(f"**{t['transfer_id']}** — {t['material_desc']} · "
+                            f"{t['quantity']:g} {t['uom']} · "
+                            f"{_lname(t['from_location'])} \u2192 {_lname(t['to_location'])} "
+                            f"· shipped {t['shipped_date']}"
+                            + (f" via {t['carrier']}" if t['carrier'] else "")
+                            + (f" · {t['source_doc']}" if t['source_type'] == 'STO' and t['source_doc']
+                               else " · Ad Hoc")
+                            + (f" · E-Way Bill {t['eway_bill_number']} (valid to "
+                               f"{t['eway_bill_valid_until']})" if t['eway_bill_number'] else ""))
+                    if t["carrier"]:
+                        shipment = shipping.build_shipment_details(t)
+                        fname, xlsx_bytes = shipping.generate_shipping_excel(shipment)
+                        c3.download_button(f"\u2b07 {t['carrier']} Details", data=xlsx_bytes,
+                            file_name=fname,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"shipdoc_{t['transfer_id']}")
+                        if t["tracking_ref"]:
+                            # AWB as a clickable link, not static text -- clicking opens
+                            # the simulated tracking dialog for this specific shipment.
+                            if st.button(f"\U0001f517 AWB {t['tracking_ref']}",
+                                        key=f"awb_link_{t['transfer_id']}"):
+                                _show_tracking(t["transfer_id"])
+                    if c4.button("\u274c Cancel", key=f"cancel_{t['transfer_id']}"):
                         try:
-                            inv.receive_transfer(t["transfer_id"])
+                            inv.cancel_transfer(t["transfer_id"], cancelled_by="ERP UI")
+                            st.session_state.pop(f"courier_issue_{t['transfer_id']}", None)
                             st.cache_data.clear()
                             st.session_state["tp_flash_message"] = ("success",
-                                f"\u2705 {t['transfer_id']} received at "
-                                f"{_lname(t['to_location'])}.")
-                            received_now = True
+                                f"\u2705 {t['transfer_id']} cancelled \u2014 stock restored at "
+                                f"{_lname(t['from_location'])}, visible again as a transfer "
+                                f"opportunity.")
+                            st.rerun()
                         except Exception as e:
                             st.error(f"\u274c {e}")
-                    if not received_now:
-                        c1.write(f"**{t['transfer_id']}** — {t['material_desc']} · "
-                                f"{t['quantity']:g} {t['uom']} · "
-                                f"{_lname(t['from_location'])} \u2192 {_lname(t['to_location'])} "
-                                f"· shipped {t['shipped_date']}"
-                                + (f" via {t['carrier']}" if t['carrier'] else ""))
-                        if t["carrier"]:
-                            shipment = shipping.build_shipment_details(t)
-                            fname, xlsx_bytes = shipping.generate_shipping_excel(shipment)
-                            c3.download_button(f"\u2b07 {t['carrier']} Details", data=xlsx_bytes,
-                                file_name=fname,
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key=f"shipdoc_{t['transfer_id']}")
-                    if received_now:
+
+                    # Real gap found from direct testing, not anticipated up front: a
+                    # transfer too heavy for every available courier used to fail only
+                    # at Submit Selected to Courier time, and the resulting warning
+                    # rendered at the very top of this whole tab -- easy to miss after
+                    # scrolling down to click a button in this section, and looked like
+                    # a silent failure even though a real reason was always generated.
+                    # This shows the same real reason inline, next to the row it's
+                    # actually about, computed proactively (own weight vs. every
+                    # available courier's own max) even before a submit is ever
+                    # attempted, and overwritten with the more specific real reason
+                    # (which can depend on what else it gets grouped with) after an
+                    # actual attempt.
+                    if not t["tracking_ref"]:
+                        issue = st.session_state.get(f"courier_issue_{t['transfer_id']}")
+                        if issue is None:
+                            item_info = po_export.get_item_by_code(t["material_code"], active_only=False)
+                            weight_per_unit = item_info.get("weight_kg") if item_info else None
+                            if weight_per_unit is not None:
+                                own_weight = weight_per_unit * t["quantity"]
+                                max_limit = max(shipping.RATE_CARDS[c]["max_weight_kg"]
+                                                for c in shipping.COURIERS)
+                                if own_weight > max_limit:
+                                    issue = (f"{own_weight:g}kg exceeds every available "
+                                            f"courier's maximum ({max_limit:g}kg) on its own.")
+                        if issue:
+                            st.warning(f"\u26a0\ufe0f {issue}", icon="\u26a0\ufe0f")
+                st.divider()
+                bcol1, bcol2 = st.columns(2)
+                if bcol1.button("\U0001f50c Submit Selected to Courier", key="submit_selected_btn"):
+                    selected_ids = [t["transfer_id"] for t in in_transit
+                                    if st.session_state.get(f"chk_receive_{t['transfer_id']}")]
+                    if not selected_ids:
+                        st.warning("No lines selected — check at least one row first.")
+                    else:
+                        by_id = {t["transfer_id"]: t for t in in_transit}
+                        # A transfer with no carrier on file is no longer skipped as an
+                        # error case — it's the real "let system choose" state (see the
+                        # Ship section's own courier dropdown), and submit_batch_to_courier()
+                        # resolves it via real least-cost, route-consolidating logic. Only
+                        # an already-booked transfer is genuinely skippable here.
+                        bookable_ids = [tid for tid in selected_ids if not by_id[tid]["tracking_ref"]]
+                        already_booked = [tid for tid in selected_ids if by_id[tid]["tracking_ref"]]
+
+                        batch_result = shipping.submit_batch_to_courier(bookable_ids) if bookable_ids \
+                            else {"bookings": [], "unbookable": []}
+
+                        # Real reasons from an actual attempt are more specific than the
+                        # proactive per-row check (they can reflect what a leg got grouped
+                        # with), so they overwrite it here. A leg that just booked
+                        # successfully has its old issue cleared -- nothing left to warn about.
+                        for u in batch_result["unbookable"]:
+                            st.session_state[f"courier_issue_{u['transfer_id']}"] = u["reason"]
+                        for b in batch_result["bookings"]:
+                            for l in b["consolidated_legs"]:
+                                st.session_state.pop(f"courier_issue_{l['transfer_id']}", None)
+
+                        for tid in selected_ids:
+                            if f"chk_receive_{tid}" in st.session_state:
+                                del st.session_state[f"chk_receive_{tid}"]
+                        st.cache_data.clear()
+
+                        msg_parts = []
+                        bookings = batch_result["bookings"]
+                        if bookings:
+                            n_legs = sum(len(b["consolidated_legs"]) for b in bookings)
+                            consolidation_note = (f" ({n_legs} shipments \u2192 {len(bookings)} "
+                                                  f"real courier booking{'s' if len(bookings) != 1 else ''}"
+                                                  f"{', consolidated' if n_legs > len(bookings) else ''})")
+                            lines = []
+                            for b in bookings:
+                                leg_ids = ", ".join(l["transfer_id"] for l in b["consolidated_legs"])
+                                lines.append(f"{b['courier']} AWB {b['awb_number']} "
+                                            f"(\u20b9{b['total_cost']:,.2f}, {b['total_weight_kg']:g}kg): "
+                                            f"{leg_ids}")
+                            msg_parts.append(f"\u2705 Booked (simulated){consolidation_note}:\n" +
+                                            "\n".join(f"  \u2022 {l}" for l in lines))
+                        failed = batch_result["unbookable"]
+                        if failed:
+                            reasons = "; ".join(f"{u['transfer_id']}: {u['reason']}" for u in failed)
+                            msg_parts.append(f"\u274c Could not book: {reasons}")
+                        if already_booked:
+                            msg_parts.append("\u2139\ufe0f Already booked, skipped: " +
+                                            ", ".join(already_booked))
+                        st.session_state["tp_flash_message"] = (
+                            "success" if not failed else "warning", "\n\n".join(msg_parts))
                         st.rerun()
+                if bcol2.button("\u2705 Confirm Receipt Selected", type="primary",
+                            key="receive_selected_btn"):
+                    selected_ids = [t["transfer_id"] for t in in_transit
+                                    if st.session_state.get(f"chk_receive_{t['transfer_id']}")]
+                    if not selected_ids:
+                        st.warning("No lines selected — check at least one row first.")
+                    else:
+                        received, failed = [], []
+                        by_id = {t["transfer_id"]: t for t in in_transit}
+                        for tid in selected_ids:
+                            try:
+                                inv.receive_transfer(tid)
+                                received.append(f"{tid} at {_lname(by_id[tid]['to_location'])}")
+                            except Exception as e:
+                                failed.append(f"{tid}: {e}")
+                            if f"chk_receive_{tid}" in st.session_state:
+                                del st.session_state[f"chk_receive_{tid}"]
+                        st.cache_data.clear()
+                        msg_parts = []
+                        if received:
+                            msg_parts.append("\u2705 Received: " + ", ".join(received))
+                        if failed:
+                            msg_parts.append("\u274c Failed: " + "; ".join(failed))
+                        st.session_state["tp_flash_message"] = (
+                            "success" if not failed else "warning", "\n\n".join(msg_parts))
+                        st.rerun()
+
+        st.divider()
+        with st.expander("\U0001f4cb Stock Transfer Orders"):
+            # Real bug fixed here: this section runs unconditionally (regardless of
+            # whether the transfer-opportunities block above ever ran), but that
+            # block's own _lname() is only defined inside its own "if position:"
+            # branch -- using it here crashed with a real scoping error whenever
+            # position was empty (e.g. right after a fresh reset, before any
+            # confirmed demand exists). A fresh, independent lookup here, the
+            # same pattern tab5 already uses for its own independent _lname().
+            _loc_names_sto = {d["id"]: d["name"] for d in load_delivery_locs()}
+            def _lname_sto(loc_id): return _loc_names_sto.get(loc_id, loc_id)
+            stos = sto.get_all_stos()
+            if not stos:
+                st.caption("No Stock Transfer Orders created yet — use \"Create STO\" above, "
+                          "on any material/Hub group with more than one requesting Plant.")
+            else:
+                for s in stos:
+                    detail = sto.get_sto(s["sto_id"])
+                    st.markdown(f"**{s['sto_id']}** — {s['material_desc']} from "
+                               f"{_lname_sto(s['hub_location'])} · {s['total_qty']:g} total · "
+                               f"{s['allocation_rule']} · created {s['created_date']} "
+                               f"by {s['created_by'] or 'unspecified'}")
+                    for l in detail["lines"]:
+                        gap_note = "" if l["allocated_qty"] >= l["requested_qty"] else \
+                            f" \u26a0\ufe0f {l['requested_qty'] - l['allocated_qty']:g} short of requested"
+                        st.caption(f"\u2003\u2192 {_lname_sto(l['to_location'])}: "
+                                  f"{l['allocated_qty']:g} allocated (requested "
+                                  f"{l['requested_qty']:g}){gap_note} · "
+                                  f"{l['transfer_id'] or 'not shipped'}")
 
     # ── TAB 5 — time-phased planning ─────────────────────────────────────────
     with tab5:
@@ -1118,7 +1425,7 @@ def page_inventory():
                 idf["location"] = idf["location"].map(_lname)
                 idf.columns = ["PR", "Material", "Location", "Required By", "Implied Arrival",
                               "Shortfall (days)"]
-                st.dataframe(idf, width="stretch", hide_index=True)
+                st.dataframe(idf, use_container_width=True, hide_index=True)
                 st.divider()
 
             if analysis["duplicates"]:
@@ -1156,7 +1463,7 @@ def page_inventory():
             if existing:
                 edf = pd.DataFrame(existing)
                 edf.columns = ["Material", "Location", "Min", "Max", "Cadence (days)"]
-                st.dataframe(edf, width="stretch", hide_index=True)
+                st.dataframe(edf, use_container_width=True, hide_index=True)
             st.divider()
 
         recs = bom.get_procurement_recommendations()
@@ -1182,7 +1489,7 @@ def page_inventory():
             ardf["location"] = ardf["location"].map(_lname)
             ardf.columns = ["Material", "Location", "Gap", "Stock-Out Date",
                             "Days Left", "Normal Lead Time (days)"]
-            st.dataframe(ardf, width="stretch", hide_index=True)
+            st.dataframe(ardf, use_container_width=True, hide_index=True)
             st.divider()
 
         if action_needed:
@@ -1221,7 +1528,7 @@ def page_inventory():
                                          "covering_pr", "stockout_date"]]
             cdf.columns = ["Material", "Location", "Gap", "Covering PR", "Needed By"]
             cdf["Location"] = cdf["Location"].map(_lname)
-            st.dataframe(cdf, width="stretch", hide_index=True)
+            st.dataframe(cdf, use_container_width=True, hide_index=True)
             st.divider()
 
         if not recs:
@@ -1235,10 +1542,15 @@ def page_inventory():
             st.info("No confirmed demand inside the planning horizon yet \u2014 nothing to project.")
         else:
             labels = {}
-            for i, p in enumerate(all_positions):
-                status_text = (f" \u26a0\ufe0f stock-out {p['stockout_date']}"
-                               if p["stockout_date"] else " \u2705 covered")
-                labels[i] = f"{p['mat_code']} \u2014 {_lname(p['location'])}{status_text}"
+            for i, position in enumerate(all_positions):
+                status = (
+                    f" ⚠️ stock-out {position['stockout_date']}"
+                    if position["stockout_date"]
+                    else " ✅ covered"
+                )
+                labels[i] = (
+                    f"{position['mat_code']} — {_lname(position['location'])}{status}"
+                )
             sel = st.selectbox("Material + location", list(labels.keys()),
                 format_func=lambda k: labels[k], key="tp_drill_sel")
             proj = all_positions[sel]
@@ -1251,7 +1563,7 @@ def page_inventory():
             with st.expander("Event-by-event detail"):
                 edf = pd.DataFrame(proj["trajectory"])
                 edf.columns = ["Date", "Balance", "Event"]
-                st.dataframe(edf, width="stretch", hide_index=True)
+                st.dataframe(edf, use_container_width=True, hide_index=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1306,7 +1618,7 @@ def page_production():
                 st.markdown(f"##### Component impact — {len(preview)} line(s)")
                 pdf = pd.DataFrame(preview)[["mat_code","mat_desc","gross_qty","on_hand_qty","after_qty"]]
                 pdf.columns = ["Code","Description","Need","On Hand","After Build"]
-                st.dataframe(pdf, width="stretch", hide_index=True)
+                st.dataframe(pdf, use_container_width=True, hide_index=True)
                 if shortages:
                     st.warning(f"\u26a0\ufe0f {len(shortages)} component(s) will go negative — "
                               "not enough on hand. Confirming will still record it honestly; "
@@ -1329,7 +1641,7 @@ def page_production():
                     st.rerun()
                 except Exception:
                     st.error("\u274c Error confirming production:")
-                    st.caption("Technical details hidden.")
+                    st.code(traceback.format_exc())
 
     # ── TAB 2 — history ───────────────────────────────────────────────────────────
     with tab2:
@@ -1340,7 +1652,7 @@ def page_production():
             cdf = pd.DataFrame(confs)[["confirmation_id","parent_code","quantity",
                                        "location_id","confirmation_date","confirmed_by"]]
             cdf.columns = ["Confirmation","Item","Qty Built","Location","Date","Confirmed By"]
-            st.dataframe(cdf, width="stretch", hide_index=True)
+            st.dataframe(cdf, use_container_width=True, hide_index=True)
 
             labels = {c["confirmation_id"]: f"{c['confirmation_id']} — {c['quantity']:g} x {c['parent_code']}"
                       for c in confs}
@@ -1348,7 +1660,7 @@ def page_production():
             detail = prod.get_confirmation_detail(sel)
             ddf = pd.DataFrame(detail)[["mat_code","mat_desc","quantity","txn_type"]]
             ddf.columns = ["Code","Description","Qty (signed)","Movement"]
-            st.dataframe(ddf, width="stretch", hide_index=True)
+            st.dataframe(ddf, use_container_width=True, hide_index=True)
 
             gen_clicked = st.button("\U0001f4c4 Generate Production Slip", key="prod_gen_doc")
             if gen_clicked:

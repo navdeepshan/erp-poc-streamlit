@@ -31,6 +31,7 @@ detail buried in a page.
 import streamlit as st
 from datetime import date, datetime
 import os
+import traceback
 
 import bom
 import po_export
@@ -44,31 +45,80 @@ import org_profile as op
 import item_tax
 import importlib
 import seed_manager as sm
-import sales_order as sales
-import billing
-import cash_application as cash
-import goods_receipt as receipts
-import vendor_onboarding as vendors
-import customer_onboarding as customers
-import purchase_bundles as bundles
-from ui_theme import apply_theme, embed_html
 
-# Page configuration and the shared theme are owned by streamlit_app.py.
+st.set_page_config(page_title="Agent Console", page_icon="\U0001f916", layout="wide")
+
+from ui_theme import apply_theme
+apply_theme()
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 
 STATIC_PROMPTS = [
-    "Show executive summary",
-    "Show sales report",
-    "Show inventory report",
-    "Show finance and receivables report",
-    "Show procurement report",
+    "What needs action right now?",
+    "Switch to reorder qty based mode",
+    "I have order data to upload",
 ]
 
 
 def build_example_prompts(data_file=None):
-    """Return only deterministic, seeded-data reporting prompts."""
-    return list(STATIC_PROMPTS)
+    """
+    Builds the ship/explain/create-PR example prompts from whatever
+    Item Master and transfer/recommendation data is REALLY loaded right
+    now, rather than fixed strings. Real bug found 2026-07-30: the
+    original hardcoded examples ("ship the scaler to Bangalore" etc.)
+    were IDS Denmed-specific — with Genrobotics data loaded instead,
+    every one of those materials and locations is simply absent, so
+    even the suggested buttons failed material resolution with the
+    exact same "I couldn't find a material matching that" a person
+    would get from a genuinely bad free-text guess. Confirmed directly
+    against real Genrobotics data before concluding this was the root
+    cause, not assumed. This app is meant to work against whichever
+    pilot dataset happens to be loaded, so its own suggested prompts
+    need to as well.
+
+    Prefers a material with a REAL live shortfall (so the resulting
+    proposal is meaningful, not just resolvable) but falls back to the
+    first two active Item Master entries if nothing is currently
+    flagged — either way, every generated prompt references a real
+    name that WILL resolve, even in the fallback case where the
+    resulting action then honestly reports no real opportunity exists,
+    which is a world away from failing at entity resolution itself.
+    """
+    items = po_export.load_item_master(data_file, active_only=True)
+    locs = pc.get_delivery_locations(active_only=True)
+    if not items or not locs:
+        return STATIC_PROMPTS
+
+    recs = bom.get_procurement_recommendations(data_file)
+    at_risk_or_needed = [r for r in recs if r["outcome"] in ("At Risk", "Action Needed")]
+    action_needed = [r for r in recs if r["outcome"] == "Action Needed"]
+    opps = bom.get_transfer_opportunities(data_file)
+
+    prompts = list(STATIC_PROMPTS)
+
+    if opps:
+        o = opps[0]
+        mat_name = _short_name(o["mat_desc"])
+        loc_name = _short_name(_lname(o["to_location"]))
+        prompts.insert(1, f"Ship the {mat_name} to {loc_name}")
+    else:
+        mat_name = _short_name(items[0]["desc"])
+        loc_name = _short_name(locs[-1]["name"] if len(locs) > 1 else locs[0]["name"])
+        prompts.insert(1, f"Ship the {mat_name} to {loc_name}")
+
+    if at_risk_or_needed:
+        mat_name = _short_name(at_risk_or_needed[0]["mat_desc"])
+        prompts.insert(2, f"Why is the {mat_name} flagged?")
+    elif len(items) > 1:
+        prompts.insert(2, f"Why is the {_short_name(items[1]['desc'])} flagged?")
+
+    if action_needed:
+        mat_name = _short_name(action_needed[0]["mat_desc"])
+        prompts.append(f"Create a requisition for the {mat_name}")
+    elif len(items) > 2:
+        prompts.append(f"Create a requisition for the {_short_name(items[2]['desc'])}")
+
+    return prompts
 
 
 def _short_name(desc):
@@ -93,8 +143,11 @@ def _init_state():
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = [
             {"role": "assistant", "content": (
-                "Choose a report below to view a safe, read-only summary of the "
-                "seeded ERP data. No technical errors are shown in this chat."
+                "Hi — I'm the Agent Console for inventory optimization and order "
+                "upload. I work from a curated set of things I understand (see the "
+                "examples below), not open-ended conversation — if I don't recognize "
+                "something, I'll say so rather than guess. Nothing I propose executes "
+                "until you approve it."
             )},
         ]
     if "pending_action" not in st.session_state:
@@ -109,12 +162,6 @@ def _say(content):
 
 def _user_said(content):
     st.session_state.chat_history.append({"role": "user", "content": content})
-
-
-def _friendly_failure(context="that request"):
-    """Keep technical failures out of the end-user conversation."""
-    _say(f"I couldn't complete {context} just now. Your data is unchanged. "
-         "Please try again or choose one of the reporting prompts below.")
 
 
 def _notify_shell_refresh():
@@ -145,7 +192,7 @@ def _render_pending_refresh_notify():
     """
     if st.session_state.get("pending_refresh_notify"):
         st.session_state.pending_refresh_notify = False
-        embed_html(
+        st.components.v1.html(
             "<script>window.top.postMessage({type: 'erp_action_approved'}, '*');</script>",
             height=0,
         )
@@ -181,78 +228,6 @@ def handle_check_at_risk():
             lines.append(f"- {r['mat_desc']} at {_lname(r['location'])} — "
                         f"need {r['recommended_qty']:g} by {r['required_by_date']}")
     _say("\n".join(lines))
-
-
-def _money(value):
-    return f"₹{float(value or 0):,.2f}"
-
-
-def handle_reporting(text):
-    """Read-only seeded-data reports with stable, presentation-ready output."""
-    lower = text.lower()
-    sales_stats = sales.stats()
-    inventory_stats = inv.stats()
-    invoice_stats = billing.stats()
-    cash_stats = cash.stats()
-    receipt_stats = receipts.stats()
-    vendor_stats = vendors.stats()
-    customer_stats = customers.stats()
-    bundle_stats = bundles.stats()
-    bom_stats = bom.stats()
-    item_count = len(po_export.load_item_master(active_only=True))
-    pr_rows = pc.get_pr_report()
-    open_prs = [r for r in pr_rows if r.get("Status") == "Open"]
-    po_count = len(pc.get_all_po_headers())
-
-    sales_lines = [
-        "### Sales report",
-        f"- **{sales_stats['total']}** sales orders worth **{_money(sales_stats['total_value'])}**",
-        f"- Confirmed order value: **{_money(sales_stats['confirmed_value'])}**",
-        f"- **{customer_stats['approved']}** active customers",
-    ]
-    inventory_lines = [
-        "### Inventory report",
-        f"- **{inventory_stats['materials_tracked']}** materials across **{inventory_stats['locations_tracked']}** locations",
-        f"- Units on hand: **{inventory_stats['total_units_on_hand']:,.0f}**",
-        f"- Units in transit: **{inventory_stats['total_units_in_transit']:,.0f}**",
-        f"- Negative balances: **{inventory_stats['negative_balances']}**",
-    ]
-    finance_lines = [
-        "### Finance & receivables",
-        f"- **{invoice_stats['total']}** invoices worth **{_money(invoice_stats['total_value'])}**",
-        f"- Cash received: **{_money(cash_stats['total_received'])}**",
-        f"- Overdue: **{cash_stats['overdue_count']}** invoices / **{_money(cash_stats['overdue_amount'])}**",
-        f"- Unapplied cash: **{_money(cash_stats['total_unapplied'])}**",
-    ]
-    procurement_lines = [
-        "### Procurement report",
-        f"- **{len(open_prs)}** open PR lines and **{po_count}** purchase orders",
-        f"- **{vendor_stats['approved']}** approved vendors",
-        f"- **{receipt_stats['by_status'].get('Posted', 0)}** posted goods receipts",
-        f"- **{bundle_stats['active_bundles']}** active purchase bundles with **{bundle_stats['total_lines']}** seeded lines",
-    ]
-
-    master_lines = [
-        "### Seeded master data",
-        f"- **{item_count}** active materials and **{vendor_stats['approved']}** approved vendors",
-        f"- **{customer_stats['approved']}** active customers",
-        f"- **{bom_stats['finished_goods']}** finished goods with **{bom_stats['bom_lines']}** BOM component lines",
-        f"- **{bundle_stats['active_bundles']}** active procurement bundles",
-    ]
-
-    if "sales" in lower:
-        lines = sales_lines
-    elif "inventory" in lower:
-        lines = inventory_lines
-    elif any(k in lower for k in ("finance", "financial", "receivable", "cash")):
-        lines = finance_lines
-    elif "procurement" in lower:
-        lines = procurement_lines
-    else:
-        lines = ["## Executive reporting snapshot"] + master_lines[1:] + [""] + \
-                sales_lines[1:] + [""] + inventory_lines[1:] + [""] + \
-                finance_lines[1:] + [""] + procurement_lines[1:]
-    _say("\n".join(lines) + "\n\n*Live from the seeded ERP dataset.*")
 
 
 def handle_explain(text):
@@ -558,106 +533,53 @@ def handle_help():
 # ── Router ────────────────────────────────────────────────────────────────
 def process_input(text):
     _user_said(text)
-    try:
-        if text.strip().lower() in {"error", "errors", "log", "logs", "traceback"}:
-            _say("No technical logs are shown here. Please choose one of the five "
-                 "read-only reports below.")
-            return
-        result = ai.match_intent(text)
-        intent = result["intent"]
-        if intent == "check_at_risk":
-            handle_check_at_risk()
-        elif intent == "reporting":
-            handle_reporting(text)
-        elif intent == "ship_transfer":
-            handle_ship(text)
-        elif intent == "receive_transfer":
-            handle_receive(text)
-        elif intent == "create_pr":
-            handle_create_pr(text)
-        elif intent == "switch_mode":
-            handle_switch_mode(text)
-        elif intent == "upload_orders":
-            handle_upload_orders()
-        elif intent == "run_setup":
-            handle_run_setup()
-        elif intent == "complete_rest":
-            handle_complete_rest()
-        elif intent == "load_full_demo":
-            handle_load_full_demo()
-        elif intent == "add_customer_wave":
-            handle_add_customer_wave()
-        elif intent == "reset_data":
-            handle_reset_data()
-        elif intent == "query_org_profile":
-            handle_query_org_profile()
-        elif intent == "query_item_tax":
-            handle_query_item_tax(text)
-        elif intent == "explain":
-            handle_explain(text)
-        elif intent == "help":
-            handle_help()
-        else:
-            _say("I couldn't match that request yet. Try a reporting prompt below, "
-                 "or ask what needs action right now.")
-    except Exception:
-        _friendly_failure("that request")
-
-
-def process_chat_query(text):
-    """Route free text only to the five safe, read-only reports."""
-    query = " ".join(text.strip().lower().split())
-    if not query:
-        return
-
-    routes = (
-        (("finance", "receivable", "invoice", "cash", "overdue"),
-         "Show finance and receivables report"),
-        (("sale", "customer", "order", "revenue"), "Show sales report"),
-        (("procurement", "purchase", "vendor", "supplier", "pr", "po"),
-         "Show procurement report"),
-        (("inventory", "stock", "material", "warehouse", "balance"),
-         "Show inventory report"),
-        (("executive", "summary", "overview", "dashboard", "performance"),
-         "Show executive summary"),
-    )
-    for keywords, report_prompt in routes:
-        if any(keyword in query for keyword in keywords):
-            _user_said(text)
-            try:
-                handle_reporting(report_prompt)
-            except Exception:
-                _friendly_failure("that report")
-            return
-
-    _user_said(text)
-    _say("I can answer from the seeded ERP reports. Ask for an executive summary, "
-         "sales, inventory, finance and receivables, or procurement.")
+    result = ai.match_intent(text)
+    intent = result["intent"]
+    if intent == "check_at_risk":
+        handle_check_at_risk()
+    elif intent == "ship_transfer":
+        handle_ship(text)
+    elif intent == "receive_transfer":
+        handle_receive(text)
+    elif intent == "create_pr":
+        handle_create_pr(text)
+    elif intent == "switch_mode":
+        handle_switch_mode(text)
+    elif intent == "upload_orders":
+        handle_upload_orders()
+    elif intent == "run_setup":
+        handle_run_setup()
+    elif intent == "complete_rest":
+        handle_complete_rest()
+    elif intent == "load_full_demo":
+        handle_load_full_demo()
+    elif intent == "add_customer_wave":
+        handle_add_customer_wave()
+    elif intent == "reset_data":
+        handle_reset_data()
+    elif intent == "query_org_profile":
+        handle_query_org_profile()
+    elif intent == "query_item_tax":
+        handle_query_item_tax(text)
+    elif intent == "explain":
+        handle_explain(text)
+    elif intent == "help":
+        handle_help()
+    else:
+        _say("I didn't catch an action I recognize in that. Try one of the "
+            "examples below, or rephrase — I look for things like \"ship X to Y\", "
+            "\"what needs action\", or \"why is X flagged\".")
 
 
 # ── UI ────────────────────────────────────────────────────────────────────
 _init_state()
 _render_pending_refresh_notify()
 
-if st.query_params.get("embedded_chat") == "1":
-    st.markdown(
-        """
-        <style>
-        [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] {
-          display: none !important;
-        }
-        [data-testid="stAppViewContainer"] > .main .block-container {
-          max-width: 500px !important;
-          padding: 1rem 1rem 5rem !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-st.markdown("## Reporting Assistant")
-st.caption("Ask about the seeded ERP data or choose a report below. Actions and "
-           "technical logs are disabled in this workspace.")
+st.markdown("## \U0001f916 Agent Console")
+st.caption("A conversational surface over the same real backend the traditional "
+          "screens use — nothing here is simulated. Pattern-matched against a "
+          "curated vocabulary, not a general-purpose language model: genuinely "
+          "unrecognized input is reported honestly, never guessed at.")
 st.divider()
 
 for msg in st.session_state.chat_history:
@@ -729,8 +651,8 @@ if st.session_state.pending_action:
                                     "; ".join(f"{r['order_ref']}: {'; '.join(r['reasons'])}"
                                              for r in result["rejected"]))
                     _say("\n\n".join(parts) if parts else "No rows found in the uploaded file.")
-                except Exception:
-                    _friendly_failure("the order upload")
+                except Exception as e:
+                    _say(f"\u274c {e}")
                 else:
                     if result.get("accepted"):
                         _notify_shell_refresh()
@@ -762,8 +684,8 @@ if st.session_state.pending_action:
                         did_reset = True
                         _say("\u2705 Reset and reseeded. Restart the traditional "
                             "apps (or just switch tabs and back) to see fresh data.")
-                except Exception:
-                    _friendly_failure("the data reset")
+                except Exception as e:
+                    _say(f"\u274c {e}")
                 else:
                     if did_reset:
                         _notify_shell_refresh()
@@ -831,8 +753,8 @@ if st.session_state.pending_action:
                             _say(f"\u2705 New customer wave added — {names} are on "
                                 f"file with real quotations, confirmed orders, and "
                                 f"Open PRs, ready for a live PR Consolidation run.")
-                except Exception:
-                    _friendly_failure("the approved action")
+                except Exception as e:
+                    _say(f"\u274c {e}")
                 else:
                     _notify_shell_refresh()
                 st.session_state.pending_action = None
@@ -843,15 +765,15 @@ if st.session_state.pending_action:
                 st.rerun()
 
 st.divider()
-st.markdown("###### Choose a report")
+st.markdown("###### Try one of these, or type your own:")
 example_prompts = build_example_prompts()
 cols = st.columns(3)
 for i, prompt in enumerate(example_prompts):
-    if cols[i % 3].button(prompt, key=f"example_{i}", width="stretch"):
+    if cols[i % 3].button(prompt, key=f"example_{i}", use_container_width=True):
         process_input(prompt)
         st.rerun()
 
-typed = st.chat_input("Ask about sales, inventory, finance, or procurement...")
+typed = st.chat_input("Or type your own request...")
 if typed:
-    process_chat_query(typed)
+    process_input(typed)
     st.rerun()

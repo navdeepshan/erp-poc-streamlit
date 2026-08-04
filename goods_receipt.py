@@ -530,6 +530,18 @@ def create_gr(po_number, line_receipts, delivery_location="", received_by="", no
         inv.record_transaction(pi.get("Material_Code"), pi.get("Material_Desc"), loc, qty,
                                "GR Receipt", "GR", gr_id, data_file=fpath)
 
+    # ATP-US-03's own real supply-arrival trigger: a GR is one of the two
+    # real events (the other being inventory.receive_transfer()) that
+    # genuinely increases on-hand for a material at a Plant, so every
+    # Open/Partially Fulfilled Backorder for each (material, location)
+    # this GR touched gets a real, automatic re-evaluation attempt here
+    # — never a batch job, never something a Planner has to remember to
+    # trigger by hand.
+    import backorder as bo
+    for pi, qty in lines_to_record:
+        loc = delivery_location or pi.get("Delivery_Location") or "Unspecified"
+        bo.reevaluate_backorders(pi.get("Material_Code"), loc)
+
     return gr_id
 
 

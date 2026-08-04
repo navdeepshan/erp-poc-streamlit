@@ -200,10 +200,34 @@ def ship_transfer(mat_code, mat_desc, from_location, to_location, qty,
     step at the receiving end, and no way to show "how much of this
     material is currently in transit" anywhere.
 
-    Deliberately no accounting entry, same reasoning as before — a
-    movement between two of the org's own locations doesn't change
-    what's owned, only where it currently is (or is in the process of
-    getting to).
+    A real GL entry now posts for the goods movement itself, matching
+    this system's own user story design exactly (INV-US-05's own GL
+    Impact section, which STO-US-02 explicitly reuses) rather than the
+    earlier, incomplete state this function was actually in: same-state
+    moves value through 1300 Inter-Plant Stock-in-Transit into 1200
+    Inventory; inter-state additionally recognizes IGST as a deemed
+    supply (a real GST rule for a cross-state movement between
+    separately-registered branches, treated the same as a real
+    inter-state sale). Value is the shipped quantity times the
+    material's own Item Master price (its "book cost" for this
+    purpose) -- a real, defensible basis, not a placeholder, though a
+    genuine moving-average or FIFO costing layer remains a real,
+    separate, larger piece of future work this does not attempt.
+    Freight (posted separately, below) was already real; this was the
+    genuinely missing half.
+
+    A real e-way bill is generated automatically here, for every
+    caller, when the real rule requires one (genuinely inter-state,
+    at or above the real value threshold) — not just for STO-created
+    transfers. This used to only be wired into sto.py's own STO
+    creation path, a real, found gap: an ad hoc shipment that's
+    genuinely inter-state and above threshold needs a real e-way bill
+    exactly as much as an STO-originated one does — compliance is
+    about the physical movement, not which internal process decided
+    to make it. Moving this in here, the one real place every
+    shipment already passes through, means every caller gets it
+    right automatically, including any future one, rather than each
+    needing to remember to wire it in separately.
     """
     if qty <= 0:
         raise ValueError("Transfer quantity must be positive.")
@@ -221,32 +245,119 @@ def ship_transfer(mat_code, mat_desc, from_location, to_location, qty,
                                      reference_type="Transfer", reference_id=transfer_id,
                                      notes=notes, data_file=data_file)
 
+    import eway_bill as ewb
+    import po_export
+    item = po_export.get_item_by_code(mat_code, active_only=False)
+    unit_price = item["price"] if item else 0
+    gst_rate = item["gst_rate"] if item and item.get("gst_rate") else 0
+    goods_value = round(unit_price * qty, 2)
+    inter_state = ewb.is_inter_state(from_location, to_location, data_file=data_file)
+    igst_amount = round(goods_value * gst_rate / 100, 2) if inter_state else 0.0
+
     fpath = data_file or DATA_FILE
     conn = db.get_connection()
     try:
         conn.execute(
             "INSERT INTO stock_transfers (transfer_id, material_code, material_desc, uom, "
             "quantity, from_location, to_location, status, shipped_date, shipped_by, "
-            "carrier, tracking_ref, notes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "carrier, tracking_ref, notes, source_type, gl_goods_value, gl_igst_amount) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (transfer_id, mat_code, mat_desc, _uom_for(mat_code, data_file), qty,
              from_location, to_location, "In Transit", str(date.today()), shipped_by,
-             carrier, tracking_ref, notes),
+             carrier, tracking_ref, notes, "Ad Hoc", goods_value, igst_amount),
         )
         conn.commit()
     finally:
         conn.close()
 
+    if goods_value > 0:
+        import accounting
+        je_lines = [
+            {"account_code": "1300", "debit": goods_value, "credit": 0,
+             "description": f"{transfer_id} ship — goods leg ({from_location})"},
+            {"account_code": "1200", "debit": 0, "credit": goods_value,
+             "description": f"{transfer_id} ship — goods leg ({from_location})"},
+        ]
+        if inter_state and igst_amount > 0:
+            je_lines.append({"account_code": "1300", "debit": igst_amount, "credit": 0,
+                             "description": f"{transfer_id} ship — IGST leg"})
+            je_lines.append({"account_code": "2220", "debit": 0, "credit": igst_amount,
+                             "description": f"{transfer_id} ship — IGST leg"})
+        accounting.post_journal_entry("Transfer", transfer_id,
+            f"{transfer_id} ship — {mat_desc} ({from_location} \u2192 {to_location})",
+            je_lines, data_file=data_file)
+
+    declared_value = goods_value
+    if ewb.is_eway_bill_required(from_location, to_location, declared_value, data_file=data_file):
+        bill = ewb.generate_eway_bill(from_location, to_location, declared_value, data_file=data_file)
+        conn = db.get_connection()
+        try:
+            conn.execute(
+                "UPDATE stock_transfers SET eway_bill_number=?, eway_bill_valid_until=? "
+                "WHERE transfer_id=?",
+                (bill["ewb_number"], bill["valid_until"], transfer_id))
+            conn.commit()
+        finally:
+            conn.close()
+
     return {"transfer_id": transfer_id, "out_txn": out_result["txn_id"],
             "warnings": out_result["warnings"]}
 
 
-def receive_transfer(transfer_id, received_by="", notes="", data_file=None):
+def receive_transfer(transfer_id, received_qty=None, received_by="", notes="",
+                     wrong_product=False, data_file=None):
     """
     Stage 2: confirms a Stock Transfer that's currently In Transit —
     posts Transfer In at the destination now, for the first time, and
     flips status to Received. Until this runs, the shipped quantity is
     genuinely absent from both locations' balances, which is correct:
     it's on a truck, not sitting on a shelf anywhere.
+
+    Real discrepancy handling, not assumed-always-full receipt (a real
+    gap found from direct testing before this existed — every receipt
+    silently posted the full shipped quantity regardless of what
+    actually arrived). received_qty is optional and defaults to the
+    full shipped quantity, so every existing caller that only ever
+    confirmed a full receipt keeps working unchanged. Comparing the
+    two determines a real discrepancy_type, captured on the record
+    itself, not just logged and discarded:
+      - Full: received_qty matches shipped quantity (the default case).
+      - Partial: less arrived than the transfer record says was shipped.
+        The shortfall is posted as genuinely missing, not silently
+        written off or assumed still in transit -- a real, separate
+        inventory-adjustment/write-off GL entry for a confirmed
+        shortfall is deliberately out of scope here, same "no
+        accounting entry" principle this function already holds for a
+        normal transfer between the org's own locations, not yet
+        extended to a shortfall specifically.
+      - Excess: more arrived than the transfer record says was
+        shipped -- posted as-is, flagged, not silently capped at the
+        original quantity.
+      - Wrong Product (wrong_product=True): what physically arrived
+        doesn't match the material this transfer_id is for at all.
+        Nothing is posted -- there is no real stock movement to record
+        when the actual received item is unknown to this function --
+        and the transfer moves to a real 'Exception' status instead of
+        'Received', requiring manual resolution this function
+        deliberately doesn't attempt to automate. A full reconciliation
+        workflow (log what genuinely arrived as its own new receipt)
+        is a real, separate piece of future work, not built here.
+
+    A real GL entry now clears this transfer's own share of 1300 Inter-
+    Plant Stock-in-Transit into 1200 Inventory (and 1170 GST Input
+    Credit -- IGST, for an inter-state transfer), matching the real
+    value ship_transfer() already posted there -- not recomputed from
+    scratch, since the received quantity can genuinely differ from what
+    was shipped. Pro-rated to the received quantity for a Partial
+    receipt (only that real share clears; the shortfall's own value
+    stays sitting in 1300, an honest, visible reflection of the same
+    real discrepancy already flagged above, not silently written off).
+    Capped at the originally-shipped value for an Excess receipt --
+    real quantity beyond what was ever shipped has no real 1300 balance
+    of its own to clear, and inventing one would mean crediting a value
+    that was never actually posted anywhere; this is a genuine, left-
+    open limitation of an Excess receipt's own GL treatment, not a
+    silently-invented resolution.
     """
     t = get_stock_transfer(transfer_id, data_file)
     if t is None:
@@ -254,22 +365,140 @@ def receive_transfer(transfer_id, received_by="", notes="", data_file=None):
     if t["status"] != "In Transit":
         raise ValueError(f"{transfer_id} is '{t['status']}' — only an In Transit transfer can be received.")
 
+    shipped_qty = t["quantity"]
+
+    if wrong_product:
+        conn = db.get_connection()
+        try:
+            conn.execute(
+                "UPDATE stock_transfers SET status='Exception', received_date=?, received_by=?, "
+                "discrepancy_type='Wrong Product', discrepancy_notes=? WHERE transfer_id=?",
+                (str(date.today()), received_by, notes, transfer_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return {"transfer_id": transfer_id, "discrepancy_type": "Wrong Product", "in_txn": None,
+               "warnings": [f"{transfer_id} flagged Wrong Product — no stock posted; "
+                           f"requires manual resolution outside this function."]}
+
+    qty = shipped_qty if received_qty is None else received_qty
+    if qty <= 0:
+        raise ValueError("Received quantity must be positive — use wrong_product=True "
+                         "for a receipt that doesn't match this transfer's material at all.")
+
+    if abs(qty - shipped_qty) < 0.005:
+        discrepancy_type = "Full"
+    elif qty < shipped_qty:
+        discrepancy_type = "Partial"
+    else:
+        discrepancy_type = "Excess"
+
     in_result = record_transaction(t["material_code"], t["material_desc"], t["to_location"],
-                                   t["quantity"], "Transfer In", reference_type="Transfer",
+                                   qty, "Transfer In", reference_type="Transfer",
                                    reference_id=transfer_id, notes=notes, data_file=data_file)
 
     conn = db.get_connection()
     try:
         conn.execute(
-            "UPDATE stock_transfers SET status='Received', received_date=?, received_by=? "
-            "WHERE transfer_id=?",
-            (str(date.today()), received_by, transfer_id),
+            "UPDATE stock_transfers SET status='Received', received_date=?, received_by=?, "
+            "received_qty=?, discrepancy_type=?, discrepancy_notes=? WHERE transfer_id=?",
+            (str(date.today()), received_by, qty, discrepancy_type,
+             notes if discrepancy_type != "Full" else "", transfer_id),
         )
         conn.commit()
     finally:
         conn.close()
 
-    return {"transfer_id": transfer_id, "in_txn": in_result["txn_id"], "warnings": in_result["warnings"]}
+    # ATP-US-03's own real supply-arrival trigger: a transfer Confirm
+    # Receipt is the second of the two real events (the other being
+    # goods_receipt.py's own GR posting) that genuinely increases
+    # on-hand for a material at a Plant.
+    import backorder as bo
+    bo.reevaluate_backorders(t["material_code"], t["to_location"])
+
+    gl_goods_value = t.get("gl_goods_value") or 0
+    gl_igst_amount = t.get("gl_igst_amount") or 0
+    if gl_goods_value > 0 and shipped_qty > 0:
+        clear_ratio = min(qty, shipped_qty) / shipped_qty
+        received_goods_value = round(gl_goods_value * clear_ratio, 2)
+        received_igst_amount = round(gl_igst_amount * clear_ratio, 2)
+        import accounting
+        je_lines = [
+            {"account_code": "1200", "debit": received_goods_value, "credit": 0,
+             "description": f"{transfer_id} receive — goods leg ({t['to_location']})"},
+            {"account_code": "1300", "debit": 0, "credit": received_goods_value,
+             "description": f"{transfer_id} receive — goods leg ({t['to_location']})"},
+        ]
+        if received_igst_amount > 0:
+            je_lines.append({"account_code": "1170", "debit": received_igst_amount, "credit": 0,
+                             "description": f"{transfer_id} receive — IGST leg"})
+            je_lines.append({"account_code": "1300", "debit": 0, "credit": received_igst_amount,
+                             "description": f"{transfer_id} receive — IGST leg"})
+        accounting.post_journal_entry("Transfer", transfer_id,
+            f"{transfer_id} receive — {t['material_desc']} at {t['to_location']}",
+            je_lines, data_file=data_file)
+
+    warnings = list(in_result["warnings"])
+    if discrepancy_type == "Partial":
+        warnings.append(f"Partial receipt: {qty:g} of {shipped_qty:g} {t['uom']} confirmed "
+                        f"— {shipped_qty - qty:g} short, not automatically written off.")
+    elif discrepancy_type == "Excess":
+        warnings.append(f"Excess receipt: {qty:g} confirmed against {shipped_qty:g} {t['uom']} "
+                        f"shipped — {qty - shipped_qty:g} more than the transfer record states.")
+
+    return {"transfer_id": transfer_id, "in_txn": in_result["txn_id"],
+           "discrepancy_type": discrepancy_type, "warnings": warnings}
+
+
+def cancel_transfer(transfer_id, cancelled_by="", notes="", data_file=None):
+    """
+    A real, genuine gap found from direct testing, not anticipated up
+    front: once ship_transfer() ran, there was no way back — a
+    transfer that turned out to be unbookable with any available
+    courier (too heavy, wrong route, whatever the real reason) was
+    permanently stuck In Transit with no path forward and no path back.
+
+    Reverses ship_transfer()'s own Transfer Out posting with a real,
+    separate "Transfer Cancelled" transaction at the source location
+    (not a silent deletion of the original Out — both stay on the real
+    transaction history, so the audit trail shows a shipment that was
+    genuinely started and then genuinely called off, not one that
+    never happened). The source location's balance is restored
+    immediately, and the material reappears as a real transfer
+    opportunity on the next Position & Transfers calculation, the same
+    as if it had never been shipped.
+
+    Only a transfer still In Transit can be cancelled -- once Received,
+    the stock has already landed and this is no longer a shipping
+    decision to undo. carrier/tracking_ref are deliberately left on the
+    record rather than wiped, even if a courier was already booked
+    before the cancellation -- real history of what was attempted, not
+    erased just because it didn't complete.
+    """
+    t = get_stock_transfer(transfer_id, data_file)
+    if t is None:
+        raise ValueError(f"{transfer_id} not found.")
+    if t["status"] != "In Transit":
+        raise ValueError(f"{transfer_id} is '{t['status']}' — only an In Transit transfer can be cancelled.")
+
+    cancel_result = record_transaction(t["material_code"], t["material_desc"], t["from_location"],
+                                       t["quantity"], "Transfer Cancelled", reference_type="Transfer",
+                                       reference_id=transfer_id, notes=notes, data_file=data_file)
+
+    conn = db.get_connection()
+    try:
+        conn.execute(
+            "UPDATE stock_transfers SET status='Cancelled', cancelled_date=?, cancelled_by=? "
+            "WHERE transfer_id=?",
+            (str(date.today()), cancelled_by, transfer_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"transfer_id": transfer_id, "cancel_txn": cancel_result["txn_id"],
+           "warnings": cancel_result["warnings"]}
 
 
 def get_stock_transfer(transfer_id, data_file=None):
@@ -279,6 +508,32 @@ def get_stock_transfer(transfer_id, data_file=None):
     finally:
         conn.close()
     return dict(row) if row else None
+
+
+def update_transfer_tracking(transfer_id, tracking_ref, carrier=None, data_file=None):
+    """
+    Persists a real courier tracking reference (e.g. an AWB number)
+    onto an already-shipped transfer, after the fact — ship_transfer()
+    only ever set tracking_ref at creation time (usually blank, since a
+    real tracking number doesn't exist until the courier actually
+    books the shipment), and nothing updated it afterward until now.
+    carrier is optional — only overwritten if explicitly passed, so
+    this can't accidentally blank out a carrier that was already
+    correctly set at ship time.
+    """
+    conn = db.get_connection()
+    try:
+        if carrier is not None:
+            conn.execute(
+                "UPDATE stock_transfers SET tracking_ref=?, carrier=? WHERE transfer_id=?",
+                (tracking_ref, carrier, transfer_id))
+        else:
+            conn.execute(
+                "UPDATE stock_transfers SET tracking_ref=? WHERE transfer_id=?",
+                (tracking_ref, transfer_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_stock_transfers(status=None, data_file=None):

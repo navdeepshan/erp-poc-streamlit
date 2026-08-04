@@ -52,6 +52,7 @@ from openpyxl.utils import get_column_letter
 import db
 import customer_onboarding as co
 import quotation as qt
+import atp
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.xlsx")
 
@@ -113,7 +114,11 @@ def get_order_items(so_id, data_file=None):
         conn.close()
     return [{"so_id": r["so_id"], "line_item": r["line_item"], "mat_code": r["material_code"],
              "mat_desc": r["material_desc"], "uom": r["uom"], "qty": r["qty"],
-             "unit_price": r["unit_price"], "line_total": r["line_total"]} for r in rows]
+             "unit_price": r["unit_price"], "line_total": r["line_total"],
+             "atp_outcome": r["atp_outcome"], "promised_qty": r["promised_qty"],
+             "backordered_qty": r["backordered_qty"], "reservation_id": r["reservation_id"],
+             "backorder_id": r["backorder_id"]}
+            for r in rows]
 
 
 def quote_already_converted(quote_id, data_file=None):
@@ -159,6 +164,17 @@ def _create_order(customer_id, line_items, source_quote, delivery_location,
     db.init_schema()
     conn = db.get_connection()
     try:
+        # Real, pre-existing race condition, found and fixed here: two
+        # concurrent order-creation calls could both read the same
+        # "highest existing SO number" before either inserted, and both
+        # try to claim the same next so_id -- a real UNIQUE constraint
+        # violation, not a hypothetical one (found via a real concurrent
+        # stress test built to verify ATP-US-01's own atomicity claim,
+        # not something this story set out to fix on its own). The same
+        # real BEGIN IMMEDIATE atomic pattern reservation.py's own
+        # create_reservation_up_to() already uses and has already proven
+        # under real concurrent load.
+        conn.execute("BEGIN IMMEDIATE")
         so_id = _next_so_id(conn)
         conn.execute(
             "INSERT INTO sales_orders (so_id, customer_id, customer_name, order_date, status, "
@@ -180,9 +196,38 @@ def _create_order(customer_id, line_items, source_quote, delivery_location,
                  li["qty"], li["unit_price"], line_total),
             )
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
-    return {"so_id": so_id, "status": status, "credit_reason": reason, "total_value": total_value}
+
+    # ATP-US-01's own real check-and-promise, one line at a time, run
+    # independently of the credit check above -- neither blocks the
+    # other, matching the story's own Preconditions exactly. Runs even
+    # for a Credit Hold order: this check's own job is only to
+    # determine what's genuinely available and reserve it, not to
+    # decide whether the order is allowed to ship.
+    atp_outcomes = []
+    for li in line_items:
+        result = atp.check_and_promise_line(so_id, line_items.index(li) + 1,
+            li["mat_code"], li["mat_desc"], delivery_location, float(li["qty"]))
+        atp_outcomes.append(result)
+
+    conn = db.get_connection()
+    try:
+        for seq, result in enumerate(atp_outcomes, 1):
+            conn.execute(
+                "UPDATE sales_order_items SET atp_outcome=?, promised_qty=?, "
+                "backordered_qty=?, reservation_id=?, backorder_id=? WHERE so_id=? AND line_item=?",
+                (result["outcome"], result["promised_qty"], result["backordered_qty"],
+                 result["reservation_id"], result["backorder_id"], so_id, seq))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"so_id": so_id, "status": status, "credit_reason": reason,
+           "total_value": total_value, "atp_outcomes": atp_outcomes}
 
 
 def create_order_from_quote(quote_id, delivery_location="", delivery_geo="",

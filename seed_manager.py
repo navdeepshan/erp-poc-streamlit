@@ -83,6 +83,7 @@ TRANSACTIONAL_TABLES = [
     "invoices", "invoice_items", "journal_entries", "journal_entry_lines",
     "payments", "payment_applications",
     "vendor_invoices", "vendor_invoice_payments",
+    "sto_header", "sto_lines", "reservations", "backorders",
 ]
 
 SEED_TABLES = [
