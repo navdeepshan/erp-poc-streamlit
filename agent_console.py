@@ -62,8 +62,10 @@ import item_tax
 import nav_catalog as nav
 import importlib
 import seed_manager as sm
+from professional_theme import apply_theme
 
 st.set_page_config(page_title="Agent Console", page_icon="\U0001f916", layout="wide")
+apply_theme("Agent Console")
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 

@@ -35,6 +35,7 @@ import contracts as ct
 import org_defaults as od
 import legal_entities as le
 import nav_catalog as nav
+from professional_theme import apply_theme
 
 DATA_FILE = os.path.join(_DIR, "data.xlsx")
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -99,6 +100,7 @@ details{background:#fff;border:1px solid #E2E8F0!important;
 summary{color:#1E293B!important;font-weight:500!important;padding:12px 16px!important}
 hr{border-color:#E2E8F0!important}
 </style>""", unsafe_allow_html=True)
+apply_theme("Source to Pay")
 
 # ── Startup check ─────────────────────────────────────────────────────────────
 # Checks erp_pilot.db, not data.xlsx — data.xlsx hasn't been a real runtime

@@ -51,12 +51,14 @@ import cash_application as ca
 import rma
 import gst_einvoice as ei
 import nav_catalog as nav
+from professional_theme import apply_theme
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(_DIR, "data.xlsx")
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 st.set_page_config(page_title="O2C — Order to Cash", page_icon="\U0001f6d2", layout="wide")
+apply_theme("Order to Cash")
 
 
 # ── Shared item catalog (mirrors erp_ui.py's loader, same underlying data) ──────

@@ -43,6 +43,7 @@ import production as prod
 import accounting as acct
 import vendor_invoices as vi
 import nav_catalog as nav
+from professional_theme import apply_theme
 
 def load_delivery_locs():
     """Delivery_Locations now lives in SQLite — delegates to
@@ -58,6 +59,7 @@ DATA_FILE = os.path.join(_DIR, "data.xlsx")
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 st.set_page_config(page_title="Manufacturing", page_icon="\U0001f527", layout="wide")
+apply_theme("Manufacturing & Inventory")
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────

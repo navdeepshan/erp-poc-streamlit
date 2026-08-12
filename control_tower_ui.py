@@ -23,8 +23,10 @@ import streamlit as st
 import pandas as pd
 
 import control_tower as ct
+from professional_theme import apply_theme
 
 st.set_page_config(page_title="Exception Control Tower", page_icon="\U0001f6e2", layout="wide")
+apply_theme("Exception Control Tower")
 
 st.title("\U0001f6e2 Exception Control Tower")
 st.caption(
