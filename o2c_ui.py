@@ -38,7 +38,9 @@ import quotation as qt
 import vendor_onboarding as vo
 import sales_order as so
 import backorder as bo
+import atp
 import fulfillment as ful
+import shipping
 import org_profile as op
 import demo_profiles as dp
 import org_defaults as od
@@ -46,15 +48,15 @@ import item_tax as it
 import billing as bl
 import accounting as acct
 import cash_application as ca
+import rma
+import gst_einvoice as ei
+import nav_catalog as nav
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(_DIR, "data.xlsx")
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 st.set_page_config(page_title="O2C — Order to Cash", page_icon="\U0001f6d2", layout="wide")
-
-from ui_theme import apply_theme
-apply_theme()
 
 
 # ── Shared item catalog (mirrors erp_ui.py's loader, same underlying data) ──────
@@ -136,17 +138,21 @@ def item_picker(key_prefix):
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### \U0001f6d2 ERP Suite")
-    st.caption("Order-to-Cash")
+    st.markdown("### \U0001f6d2 AutonoVerse Garage")
+    st.caption("Order to Cash")
     st.divider()
-    page = st.radio("", ["\U0001f465  Customer Onboarding",
-                         "\U0001f4b0  Quotation",
-                         "\U0001f4e6  Sales Orders",
-                         "\U0001f69a  Fulfillment",
-                         "\U0001f9fe  Billing & Invoicing",
-                         "\U0001f4b5  Cash Application",
-                         "\U0001f4d2  Accounting",
-                         "\u2699\ufe0f  Settings"],
+    _page_options = ["👥  Customer Onboarding",
+                     "💰  Quotation",
+                     "📦  Sales Orders",
+                     "🚚  Fulfillment",
+                     "🧾  Billing & Invoicing",
+                     "💵  Cash Application",
+                     "↩️  Returns (RMA)",
+                     "📒  Accounting",
+                     "⚙️  Settings"]
+    # `?page=` deep-link support (2026-08-11) -- see nav_catalog.py
+    page = st.radio("", _page_options,
+                    index=nav.resolve_page_index(_page_options, st.query_params.get("page")),
                     label_visibility="collapsed")
     st.divider()
 
@@ -156,9 +162,8 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 def page_customer_onboarding():
     st.markdown("## \U0001f465 Customer Onboarding")
-    st.caption("Same GSTIN/PAN checksum validation as vendor onboarding, same "
-               "approve-to-activate gate. An approved customer with no credit "
-               "limit on file stays on hold until one is set.")
+    st.caption("Onboard a customer with GSTIN/PAN validation and an approval gate. An "
+               "approved customer stays on hold until a credit limit is set.")
     st.divider()
 
     s = co.stats()
@@ -231,6 +236,9 @@ def page_customer_onboarding():
             (st.success if ok else st.error)(f"PAN: {msg}")
         city = st.text_input("City", key="co_city")
         country = st.text_input("Country", value="India", key="co_country")
+        pincode = st.text_input("Pincode", key="co_pincode",
+                                help="Required for GST e-Invoicing's BuyerDtls.Pin — "
+                                     "not needed for anything else in this app yet.")
 
     with right:
         address = st.text_input("Address", key="co_addr")
@@ -252,6 +260,7 @@ def page_customer_onboarding():
                 result = co.upsert_customer(cid, {
                     "Customer_Name": cname, "Customer_Type": ctype, "GSTIN": gstin, "PAN": pan,
                     "City": city, "Country": country, "Address": address, "Geolocation": geo,
+                    "Pincode": pincode,
                     "Contact_Name": contact_name, "Contact_Email": contact_email,
                     "Contact_Phone": contact_phone, "Payment_Terms": payment_terms,
                     "Credit_Limit": credit_limit,
@@ -300,9 +309,7 @@ def page_customer_onboarding():
 # ══════════════════════════════════════════════════════════════════════════════
 def page_quotation():
     st.markdown("## \U0001f4b0 Quotation")
-    st.caption("The reverse of RFQ — here we state the price, the customer accepts "
-               "or declines. Suggested prices are Item Master's cost marked up "
-               f"{int(qt.DEFAULT_MARKUP*100)}% as a placeholder — always editable.")
+    st.caption("Quote a price to the customer, who accepts or declines.")
     st.divider()
 
     s = qt.stats()
@@ -344,8 +351,8 @@ def page_quotation():
 
             if lines:
                 st.markdown("#### \U0001f4b5 Set quote pricing")
-                st.caption("Cost is Item Master's procurement price — shown for margin "
-                          "visibility only, not printed on the customer's document.")
+                st.caption("Cost shown here is your purchase price — for margin visibility only, not "
+                           "printed on the customer's document.")
 
                 for i, ln in enumerate(lines):
                     c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1.3, 0.6])
@@ -462,10 +469,9 @@ def page_quotation():
 # ══════════════════════════════════════════════════════════════════════════════
 def page_sales_orders():
     st.markdown("## \U0001f4e6 Sales Orders")
-    st.caption("Where credit finally gets checked. Quoting a customer never "
-               "required approval — committing to an order does. A customer who "
-               "fails the check still gets an order record, just held rather "
-               "than confirmed, same as vendor onboarding's approval gate.")
+    st.caption("Convert a quote into a firm order. This is where credit gets checked — a "
+               "customer who fails the check still gets an order record, just held rather "
+               "than confirmed.")
     st.divider()
 
     s = so.stats()
@@ -506,7 +512,7 @@ def page_sales_orders():
                     deliv_loc = sel_loc_id
                     deliv_geo = next(d["geo"] for d in deliv_locs if d["id"] == sel_loc_id)
                 else:
-                    st.warning("No delivery locations set up on the S2P app yet.")
+                    st.warning("No delivery locations set up under Source to Contract yet.")
                     deliv_loc, deliv_geo = "", ""
             with c2:
                 deliv_date = st.date_input("Requested Delivery Date",
@@ -528,9 +534,8 @@ def page_sales_orders():
 
         st.divider()
         st.markdown("#### \u26a1 Direct Order Entry")
-        st.caption("For repeat/routine orders with no separate quote step. Prices from "
-                  "Item Master cost with the same placeholder markup Quotation uses — "
-                  "there's no customer rate-agreement module yet to price off instead.")
+        st.caption("For repeat or routine orders with no separate quote step. Prices default "
+                   "to cost plus the same standard markup Quotation uses.")
 
         customers = co.list_customers()
         if not customers:
@@ -571,7 +576,7 @@ def page_sales_orders():
                     deliv_loc2 = sel_loc_id2  # store the ID — see comment on the quote-based picker above
                     deliv_geo2 = next(d["geo"] for d in deliv_locs2 if d["id"] == sel_loc_id2)
                 else:
-                    st.warning("No delivery locations set up on the S2P app yet.")
+                    st.warning("No delivery locations set up under Source to Contract yet.")
                     deliv_loc2, deliv_geo2 = "", ""
 
                 st.markdown("")
@@ -601,9 +606,25 @@ def page_sales_orders():
         if not orders:
             st.info("No orders yet.")
         else:
+            # Real fix for a real, found gap: sales_orders.status only ever
+            # tracks Confirmed/Credit Hold/Cancelled -- it was never meant
+            # to reflect physical fulfillment, and nothing here overloads
+            # that meaning (is_ready_for_fulfillment() and the Confirmed-
+            # value KPI both still key off the real, unchanged status
+            # column). This is a genuinely separate, live-computed column
+            # instead, straight from the real fulfillments table, so a
+            # fully delivered order doesn't sit forever looking identical
+            # to one that hasn't shipped at all.
+            fulfillment_by_so = {}
+            for o in orders:
+                f_records = ful.get_fulfillments(so_id=o["so_id"])
+                fulfillment_by_so[o["so_id"]] = f_records[-1]["status"] if f_records \
+                    else "Not Yet Fulfilled"
+
             odf = pd.DataFrame(orders)[["so_id","customer_name","status","total_value",
                                          "order_date","source_quote"]]
             odf.columns = ["Order","Customer","Status","Total","Date","Source Quote"]
+            odf.insert(3, "Fulfillment", [fulfillment_by_so[o["so_id"]] for o in orders])
             st.dataframe(odf, use_container_width=True, hide_index=True)
 
             labels = {o["so_id"]: f"{o['so_id']} — {o['customer_name']} ({o['status']})" for o in orders}
@@ -618,11 +639,12 @@ def page_sales_orders():
                 idf.columns = ["Code","Description","UOM","Qty","Price","Line Total"]
                 atp_icons = {"Promised": "\u2705 Promised", "Partially Promised": "\u26a0\ufe0f Partial",
                             "Backordered": "\u274c Backordered"}
-                idf["ATP"] = [atp_icons.get(i.get("atp_outcome"), "\u2014") +
-                             (f" ({i['backordered_qty']:g} short)"
-                              if i.get("atp_outcome") in ("Partially Promised", "Backordered")
-                              and i.get("backordered_qty") else "")
-                             for i in items]
+                live_statuses = [atp.get_live_line_status(i) for i in items]
+                idf["ATP"] = [atp_icons.get(s["outcome"], "\u2014") +
+                             (f" ({s['backordered_qty']:g} short)"
+                              if s["outcome"] in ("Partially Promised", "Backordered")
+                              and s["backordered_qty"] else "")
+                             for s in live_statuses]
                 st.dataframe(idf, use_container_width=True, hide_index=True)
                 st.caption(f"Total: \u20b9{order['total_value']:,.2f}  \u00b7  "
                           f"{order['payment_terms']}  \u00b7  Delivery: {_loc_display(order['delivery_location']) or 'TBD'}")
@@ -707,11 +729,10 @@ def page_sales_orders():
 
     # ── TAB 4 — Backorder worklist (ATP-US-03) ────────────────────────────────
     with tab4:
-        st.caption("Every currently-active Backorder \u2014 quantity ATP-US-01 couldn't "
-                  "promise at confirmation, automatically re-evaluated on every real "
-                  "supply arrival (a Goods Receipt or a transfer Confirm Receipt), "
-                  "never a batch job. Fulfilled strictly First-Confirmed-First-Served "
-                  "when several compete for the same new supply.")
+        st.caption("Every currently-active backorder — quantity that couldn't be promised at "
+                   "confirmation, automatically re-evaluated whenever new supply arrives. "
+                   "Fulfilled strictly first-confirmed-first-served when several compete for "
+                   "the same new supply.")
         active = bo.get_open_backorders()
         if not active:
             st.info("No open backorders right now.")
@@ -742,11 +763,8 @@ def page_sales_orders():
 # ══════════════════════════════════════════════════════════════════════════════
 def page_fulfillment():
     st.markdown("## \U0001f69a Fulfillment")
-    st.caption("Pick \u2192 Ship \u2192 Deliver. No live inventory data exists yet "
-               "(Item Master's stock column has never been populated), so this "
-               "doesn't pretend to check availability automatically — it tracks "
-               "what a human actually picked and shipped per line, honestly, "
-               "including partial shipments.")
+    st.caption("Pick, ship, and deliver against confirmed orders, including partial "
+               "shipments.")
     st.divider()
 
     s = ful.stats()
@@ -844,13 +862,18 @@ def page_fulfillment():
                         st.rerun()
 
                 if f["status"] in ("Pending", "Picking"):
-                    carrier = st.text_input("Carrier", key=f"ful_carrier_{sel}")
-                    tracking = st.text_input("Tracking Ref", key=f"ful_tracking_{sel}")
+                    LEAST_COST_OPTION = "Let system choose (least cost)"
+                    courier_choice = st.selectbox("Courier preference",
+                        [LEAST_COST_OPTION] + shipping.COURIERS, key=f"ful_courier_pref_{sel}",
+                        help="Pins a courier now, or leaves it open for a least-cost, "
+                             "route-consolidating recommendation once you submit it to the "
+                             "courier in the Courier Booking section below (after this ships).")
+                    pinned_courier = "" if courier_choice == LEAST_COST_OPTION else courier_choice
                     ship_clicked = st.button("\U0001f69a Mark Shipped", type="primary", key="ful_ship_btn")
                     if ship_clicked:
                         qtys = st.session_state.get(f"ful_ship_qtys_{sel}", {})
                         try:
-                            result = ful.record_shipment(sel, qtys, carrier, tracking)
+                            result = ful.record_shipment(sel, qtys, carrier=pinned_courier, tracking_ref="")
                             st.cache_data.clear()
                             short = [it["mat_code"] for it in items
                                     if qtys.get(it["mat_code"], it["qty_ordered"]) < it["qty_ordered"]]
@@ -894,16 +917,120 @@ def page_fulfillment():
                             st.success(f"{sel} cancelled.")
                             st.rerun()
 
+        st.divider()
+        st.markdown("##### 📮 Courier Booking")
+        st.caption("Real weight-based rate cards, automatic route consolidation, and "
+                   "least-cost carrier selection for customer deliveries. Booking, rates, and "
+                   "tracking are real.")
+
+        all_fulfillments = ful.get_fulfillments()
+        shipped_fuls = [x for x in all_fulfillments if x["status"] == "Shipped"]
+        if not shipped_fuls:
+            st.caption("No fulfillments currently awaiting courier booking — mark one "
+                      "Shipped above to book a courier for it.")
+        else:
+            @st.dialog("📦 Tracking Status (Simulated)")
+            def _show_customer_tracking(fulfillment_id):
+                status = shipping.get_tracking_status(fulfillment_id, kind="customer_fulfillment")
+                if not status:
+                    st.write("No tracking information on file yet.")
+                    return
+                st.caption("Tracking updates are simulated from the real ship date.")
+                st.markdown(f"**AWB {status['awb_number']}** — *{status['current_status']}*")
+                st.divider()
+                for cp in status["checkpoints"]:
+                    icon = "✅" if cp["completed"] else "⚪"
+                    weight = "**" if cp["completed"] else ""
+                    st.markdown(f"{icon} {weight}{cp['label']}{weight} — "
+                               f"{cp['location']} · {cp['date']}")
+                st.divider()
+                if status["current_status"] != "Delivered":
+                    st.caption("Demo control — advances this simulation to its next real "
+                              "checkpoint rather than waiting for real elapsed time.")
+                    if st.button("⏩ Skip Ahead", key=f"skip_ahead_ful_{fulfillment_id}"):
+                        shipping.skip_ahead_tracking(fulfillment_id, kind="customer_fulfillment")
+                        st.rerun()
+
+            def _select_all_book(row_ids=[x["fulfillment_id"] for x in shipped_fuls]):
+                val = st.session_state["ful_select_all_book"]
+                for fid2 in row_ids:
+                    st.session_state[f"chk_book_{fid2}"] = val
+
+            ba1, ba2 = st.columns([1, 5])
+            ba1.checkbox("Select All", key="ful_select_all_book", on_change=_select_all_book)
+
+            for f2 in shipped_fuls:
+                c0, c1, c2 = st.columns([0.4, 3.6, 1.6])
+                c0.checkbox("Select", key=f"chk_book_{f2['fulfillment_id']}", label_visibility="collapsed")
+                c1.write(f"**{f2['fulfillment_id']}** — {f2['customer_name']} · "
+                        f"{_loc_display(f2['delivery_location'])}"
+                        + (f" · pinned {f2['carrier']}" if f2['carrier'] and not f2['tracking_ref'] else ""))
+                if f2["tracking_ref"]:
+                    shipment2 = shipping.build_customer_shipment_details(f2)
+                    fname2, xlsx_bytes2 = shipping.generate_shipping_excel(shipment2)
+                    c2.download_button("⬇ Details", data=xlsx_bytes2, file_name=fname2,
+                        mime=XLSX_MIME, key=f"ful_shipdoc_{f2['fulfillment_id']}")
+                    if st.button(f"🔗 AWB {f2['tracking_ref']}",
+                                key=f"ful_awb_link_{f2['fulfillment_id']}"):
+                        _show_customer_tracking(f2["fulfillment_id"])
+
+            st.divider()
+            if st.button("🔌 Submit Selected to Courier", type="primary",
+                         key="ful_submit_courier_btn"):
+                selected_ids = [f2["fulfillment_id"] for f2 in shipped_fuls
+                               if st.session_state.get(f"chk_book_{f2['fulfillment_id']}")]
+                if not selected_ids:
+                    st.warning("No lines selected — check at least one row first.")
+                else:
+                    by_id = {f2["fulfillment_id"]: f2 for f2 in shipped_fuls}
+                    bookable_ids = [fid2 for fid2 in selected_ids if not by_id[fid2]["tracking_ref"]]
+                    already_booked = [fid2 for fid2 in selected_ids if by_id[fid2]["tracking_ref"]]
+                    batch_result = shipping.submit_batch_to_courier(
+                        bookable_ids, kind="customer_fulfillment") if bookable_ids \
+                        else {"bookings": [], "unbookable": []}
+
+                    for fid2 in selected_ids:
+                        if f"chk_book_{fid2}" in st.session_state:
+                            del st.session_state[f"chk_book_{fid2}"]
+                    st.cache_data.clear()
+
+                    msg_parts = []
+                    bookings = batch_result["bookings"]
+                    if bookings:
+                        n_legs = sum(len(b["consolidated_legs"]) for b in bookings)
+                        note = (f" ({n_legs} shipment{'s' if n_legs != 1 else ''} → "
+                               f"{len(bookings)} real courier booking{'s' if len(bookings) != 1 else ''}"
+                               f"{', consolidated' if n_legs > len(bookings) else ''})")
+                        lines2 = []
+                        for b in bookings:
+                            leg_ids = ", ".join(l["transfer_id"] for l in b["consolidated_legs"])
+                            lines2.append(f"{b['courier']} AWB {b['awb_number']} "
+                                        f"(₹{b['total_cost']:,.2f}, {b['total_weight_kg']:g}kg): "
+                                        f"{leg_ids}")
+                        NL = chr(10)
+                        msg_parts.append(f"✅ Booked (simulated){note}:{NL}" +
+                                        NL.join(f"  • {l}" for l in lines2))
+                    failed = batch_result["unbookable"]
+                    if failed:
+                        reasons = "; ".join(f"{u['transfer_id']}: {u['reason']}" for u in failed)
+                        msg_parts.append(f"❌ Could not book: {reasons}")
+                    if already_booked:
+                        msg_parts.append("ℹ️ Already booked, skipped: " +
+                                        ", ".join(already_booked))
+                    if failed:
+                        st.warning((chr(10) * 2).join(msg_parts))
+                    else:
+                        st.success((chr(10) * 2).join(msg_parts))
+                    st.rerun()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE — Settings (Org Profile + Item Tax)
 # ══════════════════════════════════════════════════════════════════════════════
 def page_settings():
     st.markdown("## \u2699\ufe0f Settings")
-    st.caption("Setup, not a daily workflow — both of these gate Billing & Invoicing. "
-               "Nothing here is guessed: an invoice can't be created until your "
-               "organization has a real GSTIN on file and every line item being "
-               "billed has a real HSN code and GST rate.")
+    st.caption("One-time setup for your organization's GSTIN and each item's HSN code and "
+               "GST rate — required before an invoice can be created.")
     st.divider()
 
     tab1, tab2, tab3 = st.tabs(["\U0001f3e2 Organization Profile", "\U0001f3f7\ufe0f Item Tax (HSN/GST)",
@@ -937,6 +1064,9 @@ def page_settings():
             city = st.text_input("City", value=profile.get("City") or "", key="op_city")
             state = st.text_input("State", value=profile.get("State") or "", key="op_state")
             country = st.text_input("Country", value=profile.get("Country") or "India", key="op_country")
+            pincode = st.text_input("Pincode", value=profile.get("Pincode") or "", key="op_pincode",
+                                    help="Required for GST e-Invoicing's SellerDtls.Pin — "
+                                         "not needed for anything else in this app yet.")
         with right:
             bank_acct = st.text_input("Bank Account No.", value=profile.get("Bank_Account_No") or "", key="op_bank")
             ifsc = st.text_input("IFSC", value=profile.get("IFSC") or "", key="op_ifsc")
@@ -950,6 +1080,7 @@ def page_settings():
                 result = op.set_org_profile({
                     "Org_ID": org_id, "Legal_Name": legal_name, "GSTIN": gstin, "PAN": pan,
                     "Address": address, "City": city, "State": state, "Country": country,
+                    "Pincode": pincode,
                     "Bank_Account_No": bank_acct, "IFSC": ifsc, "Bank_Name": bank_name,
                     "Contact_Email": contact_email, "Contact_Phone": contact_phone,
                 })
@@ -966,13 +1097,9 @@ def page_settings():
         st.divider()
         st.markdown("##### \U0001f4e6 Demand Detection Mode")
         st.caption(
-            "Controls what Inventory Position & Transfers (Manufacturing app) treats "
-            "as real demand. **Manufactured Items Only** (default) — only Sales Order "
-            "lines for items this org actually builds from a BOM count, right for a "
-            "manufacturer. **All Items** — every confirmed Sales Order line counts, "
-            "BOM or not — right for a trading/distribution business that sells finished "
-            "goods it never manufactures, where the BOM-only version would show zero "
-            "transfer opportunities no matter how real the stock imbalance is.")
+            "Controls which Sales Order lines count as demand for inventory planning — "
+            "Manufactured Items Only, or All Items (useful when your catalog includes "
+            "non-BOM items like spares).")
         current_mode = od.get_default("Demand Detection Mode")
         mode = st.radio("Mode", ["Manufactured Items Only", "All Items"],
                         index=0 if current_mode != "All Items" else 1,
@@ -1001,6 +1128,32 @@ def page_settings():
             od.set_org_default("Use Stock Transfer Orders", sto_policy)
             st.cache_data.clear()
             st.success(f"\u2705 Saved — set to '{sto_policy}'.")
+
+        st.divider()
+        st.markdown("##### \U0001f512 ATP & Backorder Policies")
+        st.caption(
+            "These are the platform's Available-to-Promise and reservation "
+            "policies. Each is shown below with its current setting.")
+
+        atp_policy_help = {
+            "Concurrency Guarantee Level": "Strict: a real, atomic check-and-reserve that can never over-promise "
+                "the same unit twice.",
+            "ATP Sourcing Scope": "Single-Plant: checks only real on-hand at the order's own assigned "
+                "location.",
+            "Reservation/Backorder Priority": "First-Confirmed-First-Served: whichever order's own confirmation call "
+                "reaches stock first gets it.",
+            "Reservation Granularity": "Quantity-Only: a reservation earmarks a quantity, with lot binding "
+                "deferred to pick time.",
+            "Reservation Visibility to Planning": "Reserved Replaces Confirmed-SO Signal: planning nets against each "
+                "order's real remaining shortfall, so an already-reserved portion is "
+                "never double-counted as open demand.",
+        }
+        for element, options in od.ATP_POLICY_OPTIONS.items():
+            current = od.get_default(element)
+            st.selectbox(element, options,
+                        index=options.index(current) if current in options else 0,
+                        key=f"op_atp_locked_{element}", disabled=True,
+                        help=atp_policy_help[element])
 
     # ── TAB 2 — item tax ─────────────────────────────────────────────────────────
     with tab2:
@@ -1037,9 +1190,9 @@ def page_settings():
 
     # ── TAB 3 — data reset & seed ────────────────────────────────────────────────
     with tab3:
-        st.warning("\u26a0\ufe0f This affects the shared database all three apps "
-                  "(Source-to-Pay, Manufacturing, Order-to-Cash) read from — not "
-                  "just this page. Restart all three after resetting.")
+        st.warning("⚠️ This affects the shared database the platform's "
+                  "Source to Contract, Manufacturing, and Order to Cash modules all "
+                  "read from — not just this page. Restart every module after resetting.")
         st.caption(
             "For switching between industry-profile demo scenarios (e.g. Dental vs. "
             "Genrobotics). Replaces all master data — Org Profile, Org Defaults, "
@@ -1228,9 +1381,9 @@ def page_settings():
                             with st.spinner("Setting up historical stock and demand…"):
                                 ds.run_setup()
                             st.cache_data.clear()
-                            st.success("\u2705 Setup loaded — head to Manufacturing app's "
-                                      "Inventory \u2192 Position & Transfers to see the "
-                                      "imbalance and execute the transfers live.")
+                            st.success("✅ Setup loaded — head to Manufacturing "
+                                      "→ Inventory → Position & Transfers to see "
+                                      "the imbalance and execute the transfers live.")
                         except Exception:
                             st.error("\u274c Setup failed:")
                             st.code(traceback.format_exc())
@@ -1262,9 +1415,8 @@ def page_settings():
 # ══════════════════════════════════════════════════════════════════════════════
 def page_billing():
     st.markdown("## \U0001f9fe Billing & Invoicing")
-    st.caption("Billed off Fulfillment, not the order — quantities reflect what "
-               "actually shipped. CGST/SGST vs IGST is computed from the buyer's "
-               "and seller's GSTIN state codes, no judgement call involved.")
+    st.caption("Invoice quantities reflect what actually shipped. CGST/SGST or IGST is "
+               "applied automatically based on the buyer's and seller's states.")
     st.divider()
 
     s = bl.stats()
@@ -1370,6 +1522,51 @@ def page_billing():
                 elif inv["status"] == "Issued":
                     st.success("\u2705 Issued — ready for payment once Cash Application exists.")
 
+                if inv["status"] == "Issued":
+                    st.markdown("##### 🌏 GST e-Invoice (IRN)")
+                    if not ei.is_configured():
+                        st.caption("⚠️ Sandbox credentials not configured — e-Invoice generation will fail "
+                                   "until they're set up. Contact your administrator.")
+                    einv = ei.get_einvoice(sel)
+                    if einv and einv["status"] == "Generated":
+                        st.success(f"IRN: `{einv['irn']}`")
+                        st.caption(f"Ack No {einv['ack_no']} · {einv['ack_date']}")
+                        with st.expander("Signed QR payload"):
+                            st.code(einv["signed_qr_code"] or "", language=None)
+                        cancellable, cancel_msg = ei.is_cancellable(sel)
+                        if cancellable:
+                            with st.popover("❌ Cancel IRN"):
+                                cr = st.text_input("Cancellation reason", key=f"ei_cancel_reason_{sel}")
+                                if st.button("Confirm IRN Cancellation", key=f"ei_cancel_btn_{sel}"):
+                                    try:
+                                        ei.cancel_irn(sel, cr)
+                                        st.success(f"IRN for {sel} cancelled.")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"❌ {e}")
+                        else:
+                            st.caption(f"ℹ️ {cancel_msg}")
+                    elif einv and einv["status"] == "Error":
+                        st.error(f"❌ Last attempt failed: {einv['error_message']}")
+                        if st.button("🔄 Retry Generate IRN", key=f"ei_retry_{sel}"):
+                            try:
+                                result = ei.generate_irn(sel)
+                                st.success(f"✅ IRN generated: `{result['irn']}`")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ {e}")
+                    elif einv and einv["status"] == "Cancelled":
+                        st.warning(f"IRN `{einv['irn']}` was cancelled "
+                                  f"({einv['cancel_date']}): {einv['cancel_reason']}")
+                    else:
+                        if st.button("🌏 Generate e-Invoice (IRN)", key=f"ei_gen_{sel}"):
+                            try:
+                                result = ei.generate_irn(sel)
+                                st.success(f"✅ IRN generated: `{result['irn']}`")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ {e}")
+
                 if inv["status"] in ("Draft", "Issued"):
                     with st.popover("\u274c Cancel invoice"):
                         reason = st.text_input("Reason", key=f"bl_cancel_reason_{sel}")
@@ -1385,13 +1582,8 @@ def page_billing():
 # ══════════════════════════════════════════════════════════════════════════════
 def page_accounting():
     st.markdown("## \U0001f4d2 Accounting")
-    st.caption("Posted automatically: a goods receipt posts Inventory/GR-IR Clearing "
-              "(ex-GST) when recorded, a Vendor Invoice clears GR/IR and posts GST "
-              "Input/Accounts Payable when simulated, a customer invoice posts AR/"
-              "Revenue/GST Output when marked Issued, a fulfillment posts COGS/"
-              "Inventory Clearing when marked Delivered. Every entry is validated "
-              "to balance before it's written — an unbalanced entry is refused, "
-              "not flagged.")
+    st.caption("Every transaction — receipts, invoices, payments, shipments — posts a "
+               "balanced journal entry automatically as it happens.")
     st.divider()
 
     s = acct.stats()
@@ -1454,11 +1646,9 @@ def page_accounting():
             st.error("\u274c Ledger does not balance — this shouldn't be possible "
                     "given post_journal_entry()'s validation; worth investigating.")
 
-        st.caption("Inventory Clearing nets Goods Receipt debits (stock arriving) "
-                  "against Fulfillment credits (stock leaving as COGS). "
-                  "Production-confirmed stock (manufactured in-house, not "
-                  "purchased) still isn't modeled here, so it stays untouched by "
-                  "that path — see the account's own description below.")
+        st.caption("Inventory Clearing nets Goods Receipt debits (stock arriving) against "
+                   "Fulfillment credits (stock leaving). Manufactured stock moves through a "
+                   "separate account — see its own description below.")
 
         st.divider()
         st.markdown("#### \u2795 Add Account")
@@ -1540,11 +1730,9 @@ def page_accounting():
 # ══════════════════════════════════════════════════════════════════════════════
 def page_cash_application():
     st.markdown("## \U0001f4b5 Cash Application")
-    st.caption("Record cash first, categorize it second — a payment gets logged "
-               "the moment it arrives, then matched to specific invoice(s) as a "
-               "separate step, same as everywhere else in this app. Short payments "
-               "(routine in India due to TDS) are tracked with a reason, not "
-               "silently forced to zero.")
+    st.caption("Log a payment as soon as it arrives, then match it to the right invoice(s) "
+               "as a separate step. Short payments (routine in India due to TDS) are "
+               "tracked with a reason.")
     st.divider()
 
     s = ca.stats()
@@ -1690,6 +1878,153 @@ def page_cash_application():
             st.success("\u2705 Nothing overdue right now.")
 
 
+def page_returns():
+    st.markdown("## ↩️ Returns (RMA)")
+    st.caption("Authorize a return against an order that actually shipped. Physical "
+               "receipt and disposition happen on Manufacturing's Quality Inspection page; "
+               "this page handles authorization and the credit memo.")
+    st.divider()
+
+    s = rma.stats()
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Awaiting Receipt", s["pending_receipt"])
+    m2.metric("Awaiting Disposition", s["pending_disposition"])
+    m3.metric("Ready for Credit", s["ready_for_credit"])
+    st.divider()
+
+    tab1, tab2, tab3 = st.tabs(["➕ Authorize RMA", "\U0001f4b3 Issue Credit Memo", "\U0001f4cb All RMAs"])
+
+    # ── TAB 1 — authorize a new RMA ──────────────────────────────────────────────
+    with tab1:
+        fulfillments = [f for f in ful.get_fulfillments() if f["status"] in ("Shipped", "Delivered")]
+        if not fulfillments:
+            st.info("No shipped/delivered fulfillments yet — nothing to return against.")
+        else:
+            f_labels = {f["fulfillment_id"]: f"{f['fulfillment_id']} — {f['customer_name']} ({f['so_id']})"
+                       for f in fulfillments}
+            sel_f = st.selectbox("Original delivery", list(f_labels.keys()),
+                                 format_func=lambda k: f_labels[k], key="rma_sel_ful")
+            fobj = next(f for f in fulfillments if f["fulfillment_id"] == sel_f)
+            items = [i for i in ful.get_fulfillment_items(sel_f) if (i["qty_shipped"] or 0) > 0]
+            if not items:
+                st.info("This delivery has no shipped quantity on any line.")
+            else:
+                remaining_by_mat = {i["mat_code"]: rma.get_remaining_returnable_qty(fobj["so_id"], i["mat_code"])
+                                    for i in items}
+                st.markdown("##### Remaining returnable quantity")
+                rdf = pd.DataFrame([{"Material": i["mat_desc"], "Code": i["mat_code"],
+                                     "Shipped": i["qty_shipped"],
+                                     "Remaining Returnable": remaining_by_mat[i["mat_code"]]}
+                                    for i in items])
+                st.dataframe(rdf, use_container_width=True, hide_index=True)
+
+                mat_labels = {i["mat_code"]: f"{i['mat_desc']} ({i['mat_code']})" for i in items
+                             if remaining_by_mat[i["mat_code"]] > 0}
+                if not mat_labels:
+                    st.caption("Nothing left returnable on this delivery.")
+                else:
+                    sel_mat = st.selectbox("Material to return", list(mat_labels.keys()),
+                                           format_func=lambda k: mat_labels[k], key="rma_sel_mat")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        qty = st.number_input("Requested return quantity", min_value=0.0,
+                            max_value=float(remaining_by_mat[sel_mat]), step=1.0, key="rma_qty")
+                    with c2:
+                        reason = st.text_input("Return reason", key="rma_reason")
+                    override_reason = st.text_input(
+                        f"Override reason (only needed if outside the {rma.RETURN_WINDOW_DAYS}-day window)",
+                        key="rma_override")
+                    if st.button("✅ Authorize RMA", type="primary", key="rma_auth_btn"):
+                        if qty <= 0:
+                            st.error("Enter a quantity greater than zero.")
+                        elif not reason.strip():
+                            st.error("A return reason is required.")
+                        else:
+                            try:
+                                result = rma.create_rma(fobj["so_id"], sel_mat, qty, reason,
+                                    authorized_by="O2C User", window_override_reason=override_reason)
+                                st.cache_data.clear()
+                                note = (" (outside the standard window — authorized via override)"
+                                       if result["outside_window"] else "")
+                                st.success(f"✅ {result['rma_id']} authorized{note}. Head to the "
+                                          "Manufacturing app's Quality Inspection page to receive it "
+                                          "physically.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ {e}")
+
+    # ── TAB 2 — issue a credit memo against a received RMA ───────────────────────
+    with tab2:
+        ready = rma.get_ready_for_credit()
+        if not ready:
+            st.info("No received RMAs are ready for a credit memo right now.")
+        else:
+            labels = {r["rma_id"]: f"{r['rma_id']} — {r['mat_desc']} ({r['received_qty']:g} units, {r['so_id']})"
+                     for r in ready}
+            sel_rma = st.selectbox("RMA", list(labels.keys()), format_func=lambda k: labels[k],
+                                   key="rma_credit_sel")
+            robj = next(r for r in ready if r["rma_id"] == sel_rma)
+            st.caption(f"Status: {robj['status']}" +
+                      (f" · Disposition: {robj['disposition']}" if robj["disposition"]
+                       else " · Not yet dispositioned — a credit memo doesn't require disposition first"))
+            invoice, line = rma._find_original_invoice_line(robj["so_id"], robj["mat_code"])
+            if invoice is None:
+                st.warning("No invoice found for this line yet — a credit memo needs a "
+                          "resolvable original invoice.")
+            else:
+                ratio = robj["received_qty"] / (line["qty"] or 1)
+                preview_taxable = round(line["taxable_value"] * ratio, 2)
+                preview_gst = (round((line["cgst_amount"] or 0) * ratio, 2) +
+                              round((line["sgst_amount"] or 0) * ratio, 2) +
+                              round((line["igst_amount"] or 0) * ratio, 2))
+                st.markdown(f"**Original invoice:** {invoice['invoice_id']} — "
+                           f"₹{line['unit_price']:,.2f}/unit, {invoice['place_of_supply']}")
+                st.markdown(f"**Credit preview:** ₹{preview_taxable:,.2f} taxable + "
+                           f"₹{preview_gst:,.2f} GST = **₹{preview_taxable + preview_gst:,.2f}**")
+                if st.button("\U0001f4b3 Issue Credit Memo", type="primary", key="rma_cm_btn"):
+                    try:
+                        result = rma.issue_credit_memo(sel_rma, issued_by="Billing Specialist")
+                        st.cache_data.clear()
+                        st.success(f"✅ {result['credit_memo_id']} issued — "
+                                  f"₹{result['credit_total']:,.2f} credited against "
+                                  f"{result['invoice_id']}, posted as {result['je_id']}.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ {e}")
+
+    # ── TAB 3 — full worklist + cancel ────────────────────────────────────────────
+    with tab3:
+        all_rmas = rma.get_rmas()
+        if not all_rmas:
+            st.info("No RMAs yet.")
+        else:
+            credited_ids = {cm["rma_id"] for cm in rma.get_credit_memos()}
+            rdf = pd.DataFrame([{
+                "RMA": r["rma_id"], "SO": r["so_id"], "Material": r["mat_desc"],
+                "Requested": r["requested_qty"], "Received": r["received_qty"],
+                "Status": r["status"], "Disposition": r["disposition"] or "—",
+                "Credited": "✅" if r["rma_id"] in credited_ids else "—",
+                "Reason": r["reason"],
+            } for r in all_rmas])
+            st.dataframe(rdf, use_container_width=True, hide_index=True)
+
+            open_rmas = [r for r in all_rmas if r["status"] == "Authorized"]
+            if open_rmas:
+                st.divider()
+                st.markdown("##### Cancel an Authorized RMA")
+                labels = {r["rma_id"]: f"{r['rma_id']} — {r['mat_desc']}" for r in open_rmas}
+                sel_cancel = st.selectbox("RMA to cancel", list(labels.keys()),
+                                          format_func=lambda k: labels[k], key="rma_cancel_sel")
+                if st.button("\U0001f5d1️ Cancel RMA", key="rma_cancel_btn"):
+                    try:
+                        rma.cancel_rma(sel_cancel)
+                        st.cache_data.clear()
+                        st.success(f"✅ {sel_cancel} cancelled.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ {e}")
+
+
 # ── Router ─────────────────────────────────────────────────────────────────────
 if "Customer Onboarding" in page:
     page_customer_onboarding()
@@ -1703,7 +2038,10 @@ elif "Billing" in page:
     page_billing()
 elif "Cash Application" in page:
     page_cash_application()
+elif "Returns" in page:
+    page_returns()
 elif "Accounting" in page:
     page_accounting()
 elif "Settings" in page:
     page_settings()
+

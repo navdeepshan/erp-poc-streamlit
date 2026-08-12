@@ -32,7 +32,10 @@ New sheets:
                        Contact_Name | Contact_Email | Contact_Phone |
                        GSTIN | PAN | Credit_Limit | Credit_Status |
                        Payment_Terms | Onboarding_Status | KYC_Flag |
-                       Onboarded_Date | Active
+                       Onboarded_Date | Active | Pincode
+
+Pincode added 2026-08-10 for gst_einvoice.py's own BuyerDtls.Pin — see
+org_profile.py's own docstring for the seller-side counterpart.
   Customer_Documents   Document_ID | Customer_ID | Doc_Type | Filename |
                        Uploaded_Date | Status | Notes
 
@@ -102,6 +105,7 @@ _COL_MAP = {  # SQLite column -> the Capitalized key shape callers already expec
     "payment_terms": "Payment_Terms", "onboarding_status": "Onboarding_Status",
     "kyc_flag": "KYC_Flag", "onboarded_date": "Onboarded_Date", "active": "Active",
     "default_delivery_location": "Default_Delivery_Location",
+    "pincode": "Pincode",
 }
 _REV_COL_MAP = {v: k for k, v in _COL_MAP.items()}
 
@@ -138,7 +142,8 @@ def upsert_customer(customer_id, fields, data_file=None):
     """
     fields: dict with any of Customer_Name, Customer_Type, Geolocation, City,
     Country, Address, Contact_Name, Contact_Email, Contact_Phone, GSTIN, PAN,
-    Credit_Limit, Payment_Terms, Default_Delivery_Location. Runs the same GSTIN/PAN checks vendor intake
+    Credit_Limit, Payment_Terms, Default_Delivery_Location, Pincode. Runs the
+    same GSTIN/PAN checks vendor intake
     uses and sets Onboarding_Status/KYC_Flag accordingly. New customers save
     Active='No' and Credit_Status='Not Set' until approved — see
     approve_customer(). Returns {checks, onboarding_status, kyc_flag, is_new}.

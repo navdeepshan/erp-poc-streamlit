@@ -30,8 +30,12 @@ changing it doesn't create a second orphaned row or break the lookup.
 
 New sheet:
   Org_Profile   Org_ID | Legal_Name | GSTIN | PAN | Address | City | State |
-                Country | Bank_Account_No | IFSC | Bank_Name |
+                Country | Pincode | Bank_Account_No | IFSC | Bank_Name |
                 Contact_Email | Contact_Phone
+
+Pincode added 2026-08-10 for gst_einvoice.py's own SellerDtls.Pin — the
+IRP's Generate IRN schema requires a real 6-digit pincode neither this
+module nor Customer_Master had ever needed before e-invoicing existed.
 
 SQLite pilot: Org_Profile now lives in erp_pilot.db (table `org_profile`).
 """
@@ -49,6 +53,7 @@ DEFAULT_ORG_ID = "DEFAULT"  # only used as the fallback ID for a brand-new
 _COL_MAP = {
     "org_id": "Org_ID", "legal_name": "Legal_Name", "gstin": "GSTIN", "pan": "PAN",
     "address": "Address", "city": "City", "state": "State", "country": "Country",
+    "pincode": "Pincode",
     "bank_account_no": "Bank_Account_No", "ifsc": "IFSC", "bank_name": "Bank_Name",
     "contact_email": "Contact_Email", "contact_phone": "Contact_Phone",
 }
@@ -88,7 +93,8 @@ def is_configured(data_file=None):
 def set_org_profile(fields, data_file=None):
     """
     fields: any of Org_ID, Legal_Name, GSTIN, PAN, Address, City, State,
-    Country, Bank_Account_No, IFSC, Bank_Name, Contact_Email, Contact_Phone.
+    Country, Pincode, Bank_Account_No, IFSC, Bank_Name, Contact_Email,
+    Contact_Phone.
     Validates GSTIN/PAN with the same checksum logic used everywhere else.
     Returns {checks, is_configured}.
 

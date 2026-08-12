@@ -275,6 +275,33 @@ def release_credit_hold(so_id, data_file=None):
 
 
 def cancel_order(so_id, reason="", data_file=None):
+    """
+    Cancelling the order itself is only half of it — found directly
+    (2026-08-11) as a real bug, not a refinement: this used to flip
+    only sales_orders.status, leaving every one of this order's own
+    Open reservations and Open/Partially Fulfilled backorders sitting
+    there untouched. Since bom.get_inventory_position() and
+    reservation.get_available_to_promise() both net real on-hand
+    against every currently-Open reservation regardless of whether its
+    own Sales Order still exists, a cancelled order's reservation went
+    on suppressing real, physically-available stock forever — for
+    Position & Transfers' own on-hand figure and for every future
+    order's real-time ATP check alike, not just a stale display.
+    reservation.release_reservation()'s own docstring already names
+    "a Sales Order line was cancelled" as its intended trigger; this is
+    that wiring, not new policy.
+
+    Backorders are cancelled *before* reservations are released, not
+    the other order (2026-08-11) — release_reservation() itself now
+    re-triggers backorder.reevaluate_backorders() for that same
+    (material, location), since a released reservation is a real
+    increase in Available-to-Promise other open backorders deserve a
+    shot at, the same as new supply arriving. If this order's own
+    backorder were still Open at that moment, that re-check could hand
+    it a split-second reservation of its own, immediately orphaned the
+    instant this loop then cancels it. Cancelling first removes it from
+    the re-check's own candidate pool entirely, closing that window.
+    """
     conn = db.get_connection()
     try:
         row = conn.execute("SELECT notes FROM sales_orders WHERE so_id = ?", (so_id,)).fetchone()
@@ -288,6 +315,24 @@ def cancel_order(so_id, reason="", data_file=None):
             conn.commit()
     finally:
         conn.close()
+
+    import reservation as res
+    import backorder as bo
+    cancel_note = f"{so_id} cancelled" + (f": {reason}" if reason else "")
+    conn = db.get_connection()
+    try:
+        open_reservations = conn.execute(
+            "SELECT reservation_id FROM reservations WHERE so_id=? AND status='Open'",
+            (so_id,)).fetchall()
+        open_backorders = conn.execute(
+            "SELECT backorder_id FROM backorders WHERE so_id=? AND status IN "
+            "('Open', 'Partially Fulfilled')", (so_id,)).fetchall()
+    finally:
+        conn.close()
+    for b in open_backorders:
+        bo.cancel_backorder(b["backorder_id"], reason=cancel_note)
+    for r in open_reservations:
+        res.release_reservation(r["reservation_id"], reason=cancel_note)
 
 
 def is_ready_for_fulfillment(so_id, data_file=None):

@@ -12,6 +12,22 @@ sales_order_import.py, org_defaults.py) against the same shared
 database — nothing approved here is a simulation of an action, it IS
 the action, immediately visible in the traditional apps too.
 
+Navigation is the one deliberate exception to that scope boundary
+(2026-08-11, direct instruction): the console recognizes every real
+page and tab name across all three core apps (nav_catalog.py's own
+single source of truth) and, on a match, hands back a real clickable
+link to the right app landing on the right page — worth naming as a
+real widening of "not the whole platform," not silently folded in as
+if it had always been true. Read-only by nature (opening a page
+changes nothing), so unlike every action above it skips the pending_
+action/Approve step entirely, the same as the org-profile and item-
+tax lookups already do. Page-level only: the link lands on the
+target's own parent page, never deep-linked to a specific tab
+directly, which Streamlit's own st.tabs() has no mechanism for without
+a real, separately-scoped restructuring of every tab group in all
+three apps — a tab match is still named in plain text ("...then click
+the X tab"), just not auto-selected.
+
 The "conversational" layer (agent_intents.py) is rule-based pattern
 matching against a curated vocabulary, not a general-purpose language
 model — this app is honest about that rather than implying more than
@@ -43,13 +59,11 @@ import agent_intents as ai
 import demo_profiles as dp
 import org_profile as op
 import item_tax
+import nav_catalog as nav
 import importlib
 import seed_manager as sm
 
 st.set_page_config(page_title="Agent Console", page_icon="\U0001f916", layout="wide")
-
-from ui_theme import apply_theme
-apply_theme()
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -156,12 +170,69 @@ def _init_state():
         st.session_state.clarify = None
 
 
-def _say(content):
-    st.session_state.chat_history.append({"role": "assistant", "content": content})
+def _say(content, nav_link=None):
+    """
+    nav_link (optional): {"app", "app_label", "url"} — rendered as a
+    real cross-frame navigation control after this message's own text,
+    not as part of `content` itself, since a plain markdown link can't
+    carry the onclick JS a combined_view.html deep link needs (see
+    _render_nav_link()'s own docstring for why).
+    """
+    st.session_state.chat_history.append(
+        {"role": "assistant", "content": content, "nav_link": nav_link})
 
 
 def _user_said(content):
     st.session_state.chat_history.append({"role": "user", "content": content})
+
+
+def _render_nav_link(nav_link):
+    """
+    Real cross-frame navigation, not a plain link — found directly:
+    when this console runs embedded in combined_view.html's own RHS
+    pane (its normal, real deployment), a plain `<a href>` either opens
+    a brand-new browser window/tab or navigates this console's own
+    frame away, neither of which is "switch the LHS pane to the target
+    app," the one thing actually wanted. combined_view.html already
+    solved the identical cross-origin problem once, for its own
+    post-approval auto-refresh (see that file's own `erp_action_
+    approved` listener) — window.postMessage to window.top, the one
+    channel that reaches across different-port (different-origin)
+    iframes at all. This reuses that exact established channel with a
+    new message type, `erp_navigate`, rather than inventing a second
+    mechanism.
+
+    Can't tell, from inside this component's own sandboxed iframe,
+    whether window.top is genuinely combined_view.html (this console
+    opened standalone, not embedded, also has a window.top -- just one
+    frame up, itself) -- cross-origin rules block reading window.top's
+    own location to check. So this always posts the message (a real
+    no-op if nothing's listening) *and* always also renders a plain
+    fallback link beside it, so standalone access still has a real,
+    working way to get there.
+    """
+    import streamlit.components.v1 as components
+    import html as _html
+    url = nav_link["url"]
+    app = nav_link["app"]
+    label = _html.escape(nav_link["app_label"])
+    url_js = url.replace("'", "%27")
+    components.html(f"""
+        <div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;
+                    display:flex;align-items:center;gap:10px;padding:2px 0;">
+          <button onclick="window.top.postMessage(
+                {{type:'erp_navigate', app:'{app}', url:'{url_js}'}}, '*')"
+                  style="padding:7px 14px;background:#2563EB;color:#fff;
+                        border:none;border-radius:6px;font-weight:600;
+                        font-size:13px;cursor:pointer;">
+            Open {label} →
+          </button>
+          <a href="{url}" target="_blank"
+             style="font-size:12px;color:#64748B;text-decoration:underline;">
+            or open in a new tab
+          </a>
+        </div>
+    """, height=42)
 
 
 def _notify_shell_refresh():
@@ -523,6 +594,37 @@ def handle_query_item_tax(text):
             ("..." if len(missing) > 8 else ""))
 
 
+def handle_navigate(text):
+    """
+    Read-only, like handle_query_org_profile()/handle_query_item_tax()
+    above — a real clickable link, no pending_action/Approve step,
+    since opening a page changes nothing. Page-level linking only, by
+    direct instruction: the link always lands on the target's own
+    parent page; a tab match is named in plain text, not deep-linked
+    to directly — see nav_catalog.py's own module docstring for why
+    (Streamlit's st.tabs() has no programmatic-selection mechanism;
+    real tab-level deep-linking would mean restructuring every tab
+    group in all three core apps, scoped and deliberately set aside as
+    separate, larger work).
+    """
+    resolved = ai.resolve_screen(text)
+    if resolved["candidates"]:
+        names = "; ".join(
+            f"{c['app_label']} → {c['page_label']}" + (f" → {c['tab']}" if c["tab"] else "")
+            for c in resolved["candidates"][:6])
+        _say(f"A few screens could match that: {names}. Which one did you mean?")
+        return
+    if resolved["match"]:
+        m = resolved["match"]
+        url = nav.build_page_url(m["app"], m["page_key"])
+        tab_note = f" — then click the **{m['tab']}** tab" if m["tab"] else ""
+        _say(f"That's in the **{m['app_label']}** → **{m['page_label']}**{tab_note}.",
+            nav_link={"app": m["app"], "app_label": m["app_label"], "url": url})
+        return
+    _say("I couldn't match that to a real screen. Try naming it closer to how it "
+        "appears in the app, e.g. \"Position & Transfers\" or \"RFx Management\".")
+
+
 def handle_help():
     _say("Here's what I can help with right now:\n\n" +
         "\n".join(f"- {p}" for p in build_example_prompts()) +
@@ -561,6 +663,8 @@ def process_input(text):
         handle_query_org_profile()
     elif intent == "query_item_tax":
         handle_query_item_tax(text)
+    elif intent == "navigate":
+        handle_navigate(text)
     elif intent == "explain":
         handle_explain(text)
     elif intent == "help":
@@ -585,6 +689,8 @@ st.divider()
 for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"], avatar="\U0001f916" if msg["role"] == "assistant" else None):
         st.markdown(msg["content"])
+        if msg.get("nav_link"):
+            _render_nav_link(msg["nav_link"])
 
 # ── Clarification prompt (ambiguous entity) ──────────────────────────────────
 if st.session_state.clarify:

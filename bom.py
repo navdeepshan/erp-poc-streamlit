@@ -125,22 +125,27 @@ def get_bom_matched_open_sales_orders(data_file=None):
     sales_order.py imports customer_onboarding, quotation,
     pr_consolidation, none of which import bom.py).
 
-    What counts as "demand" depends on org_defaults' Demand Detection
-    Mode (default "Manufactured Items Only", preserving the original
-    behavior for anyone who hasn't set this explicitly):
-      - "Manufactured Items Only" — item must be a BOM parent (a
-        finished good this org actually builds). The original behavior,
-        right for a manufacturer like Genrobotics.
-      - "All Items" — every confirmed Sales Order line counts, BOM or
-        not. Right for a pure-trading/distribution business (e.g. IDS
-        Denmed) that sells finished goods it never manufactures — under
-        the old BOM-only logic, none of their Sales Orders would ever
-        register as demand, and Inventory Position & Transfers would
-        show nothing no matter how real their stock imbalance was. This
-        is the one function get_inventory_position() and
-        get_transfer_opportunities() both depend on for their demand
-        signal, so fixing it here is the whole fix — nothing downstream
-        needed to change.
+    Every confirmed Sales Order line counts as real demand, whether its
+    own item is a BOM parent (explodes into components downstream, in
+    _batch_demand_events()) or a raw/leaf item ordered directly — a
+    real business scenario (field-service spares) this project's own
+    demo guide already assumes, not a hypothetical. Fixed 2026-08-10
+    (CONTEXT_HANDOFF_v2.md §7m): this used to gate on "is the item a
+    registered BOM parent," excluding a direct-sale leaf item's own
+    demand entirely — but explode_bom() already handles a leaf safely
+    on its own (returns the item itself, no BOM needed), so the gate
+    was excluding something the function underneath it was already
+    prepared to handle correctly. Found via a live test ordering the
+    Battery Pack directly and getting zero demand signal anywhere.
+
+    org_defaults' own "Demand Detection Mode" setting ("Manufactured
+    Items Only" vs "All Items") no longer changes what counts as demand
+    here — both now compute identically, since every line always
+    counts. Left real and configurable in Settings rather than silently
+    removed; see CLAUDE.md's own "Still open" section. Per-event
+    provenance (whether a given unit of demand came from exploding a
+    BOM parent or from a direct-sale leaf) is preserved instead, one
+    level down, in _batch_demand_events()'s own source_type tag.
 
     Deliberately just SURFACES these — doesn't auto-explode or
     auto-propose anything. Per direct instruction, auto-*proposing* a PR
@@ -152,43 +157,41 @@ def get_bom_matched_open_sales_orders(data_file=None):
     import sales_order as so
     import org_defaults as od
     import backorder
-    all_items_mode = od.get_default("Demand Detection Mode", fpath) == "All Items"
-    parents = None if all_items_mode else {fg["code"] for fg in get_finished_goods(fpath)}
+    od.validate_atp_policy("Reservation Visibility to Planning", data_file=fpath)
     out = []
     for order in so.get_orders(status="Confirmed", data_file=fpath):
         for item in so.get_order_items(order["so_id"], fpath):
-            if all_items_mode or item["mat_code"] in parents:
-                # Reservation Visibility to Planning (ATP-US-01's own default
-                # policy): a line's real demand for planning purposes is its
-                # own genuinely still-open shortfall, not its full original
-                # quantity or a stale snapshot of the shortfall. Reads the
-                # real, live Backorder's own open_qty (ATP-US-03 actively
-                # maintains this on every real supply arrival) rather than
-                # this line's own static backordered_qty column, which is
-                # set once at ATP-US-01's initial check and never revisited
-                # -- a real bug found and fixed here directly: without this,
-                # a Backorder already Partially Fulfilled by a real transfer
-                # or GR would still count its full original shortfall as
-                # open demand, double-counting the portion that already
-                # arrived. A Cancelled or Fulfilled Backorder correctly
-                # contributes zero. Falls back to the full quantity for a
-                # pre-ATP order (atp_outcome is None -- created before this
-                # policy existed, or by a caller that doesn't run the ATP
-                # check), preserving this function's own original behavior
-                # for those.
-                if item.get("atp_outcome") is None:
-                    demand_qty = item["qty"]
-                elif item.get("backorder_id"):
-                    live_bo = backorder.get_backorder(item["backorder_id"])
-                    demand_qty = (live_bo["open_qty"] if live_bo and
-                                 live_bo["status"] in ("Open", "Partially Fulfilled") else 0)
-                else:
-                    demand_qty = 0
-                out.append({"so_id": order["so_id"], "customer_name": order["customer_name"],
-                           "mat_code": item["mat_code"], "mat_desc": item["mat_desc"],
-                           "qty": demand_qty, "delivery_location": order["delivery_location"],
-                           "delivery_geo": order["delivery_geo"],
-                           "requested_delivery_date": order["requested_delivery_date"]})
+            # Reservation Visibility to Planning (ATP-US-01's own default
+            # policy): a line's real demand for planning purposes is its
+            # own genuinely still-open shortfall, not its full original
+            # quantity or a stale snapshot of the shortfall. Reads the
+            # real, live Backorder's own open_qty (ATP-US-03 actively
+            # maintains this on every real supply arrival) rather than
+            # this line's own static backordered_qty column, which is
+            # set once at ATP-US-01's initial check and never revisited
+            # -- a real bug found and fixed here directly: without this,
+            # a Backorder already Partially Fulfilled by a real transfer
+            # or GR would still count its full original shortfall as
+            # open demand, double-counting the portion that already
+            # arrived. A Cancelled or Fulfilled Backorder correctly
+            # contributes zero. Falls back to the full quantity for a
+            # pre-ATP order (atp_outcome is None -- created before this
+            # policy existed, or by a caller that doesn't run the ATP
+            # check), preserving this function's own original behavior
+            # for those.
+            if item.get("atp_outcome") is None:
+                demand_qty = item["qty"]
+            elif item.get("backorder_id"):
+                live_bo = backorder.get_backorder(item["backorder_id"])
+                demand_qty = (live_bo["open_qty"] if live_bo and
+                             live_bo["status"] in ("Open", "Partially Fulfilled") else 0)
+            else:
+                demand_qty = 0
+            out.append({"so_id": order["so_id"], "customer_name": order["customer_name"],
+                       "mat_code": item["mat_code"], "mat_desc": item["mat_desc"],
+                       "qty": demand_qty, "delivery_location": order["delivery_location"],
+                       "delivery_geo": order["delivery_geo"],
+                       "requested_delivery_date": order["requested_delivery_date"]})
     return out
 
 
@@ -237,7 +240,7 @@ def get_inventory_position(data_file=None):
         return []
 
     # Aggregate gross demand per (material, location)
-    demand = {key: sum(qty for _d, qty, _ref in events) for key, events in demand_events.items()}
+    demand = {key: sum(qty for _d, qty, _ref, _src in events) for key, events in demand_events.items()}
 
     catalog = {i["code"]: i for i in po_export.load_item_master(fpath)}
     open_exposure = _batch_open_po_exposure(fpath)
@@ -323,18 +326,42 @@ def get_planning_params(data_file=None):
     return [dict(r) for r in rows]
 
 
+def delete_planning_params(material_code, location, data_file=None):
+    """
+    Removes one (material, location) row entirely — a real gap found
+    directly: this config table's own screen let a Planner add a row
+    but never remove one, so a genuine mis-entry (wrong material code,
+    wrong location, a min/max typo) had no way back out except editing
+    the underlying database by hand. No-op, not an error, if the row
+    doesn't exist — a caller retrying after an already-successful
+    delete shouldn't get a confusing failure.
+    """
+    conn = db.get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM material_location_planning_params WHERE material_code=? AND location=?",
+            (material_code, location))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _reorder_qty_demand_events(horizon_days=None, data_file=None):
     """
     Reorder Qty Based mode's demand producer — same output shape as
-    _batch_demand_events() ({(mat_code, location): [(date, qty, ref),
-    ...]}), so project_position() can't tell the difference and needs
-    no special-casing. The events themselves are assumed, not
-    confirmed — every reference is tagged 'REORDER-QTY-ASSUMED'
-    precisely so nothing downstream can mistake one for a real order,
-    and the dispatcher below (get_active_demand_events) only ever calls
-    this function when Reorder Qty Based is the tenant's single active
-    mode — an assumed event never sits on the same trajectory as a
-    confirmed one.
+    _batch_demand_events() ({(mat_code, location): [(date, qty, ref,
+    source_type), ...]}), so project_position() can't tell the
+    difference and needs no special-casing. The events themselves are
+    assumed, not confirmed — every reference is tagged
+    'REORDER-QTY-ASSUMED' precisely so nothing downstream can mistake
+    one for a real order, and the dispatcher below
+    (get_active_demand_events) only ever calls this function when
+    Reorder Qty Based is the tenant's single active mode — an assumed
+    event never sits on the same trajectory as a confirmed one.
+    source_type is always "Reorder Policy" (added 2026-08-10,
+    CONTEXT_HANDOFF_v2.md §7m) — a real, structured tag for what was
+    previously only distinguishable by sniffing the ref string's own
+    prefix.
 
     For each configured (material, location): implied rate = (max -
     min) / cadence. Generates one recurring demand event of (max - min)
@@ -359,7 +386,7 @@ def _reorder_qty_demand_events(horizon_days=None, data_file=None):
         cycle = 1
         while d <= horizon_cutoff:
             events.setdefault(key, []).append(
-                (d.isoformat(), qty_per_cycle, f"REORDER-QTY-ASSUMED-cycle{cycle}"))
+                (d.isoformat(), qty_per_cycle, f"REORDER-QTY-ASSUMED-cycle{cycle}", "Reorder Policy"))
             d += timedelta(days=cadence)
             cycle += 1
     return events
@@ -404,9 +431,18 @@ def _batch_demand_events(data_file=None):
     'now'; a time-phased projection needs to know exactly which date
     each unit of demand actually falls due on.
 
-    Returns {(mat_code, location): [(date, qty, so_id), ...]}, dates as
-    'YYYY-MM-DD' strings, unsorted (the caller sorts once it's merged
-    with supply events).
+    Returns {(mat_code, location): [(date, qty, so_id, source_type), ...]},
+    dates as 'YYYY-MM-DD' strings, unsorted (the caller sorts once it's
+    merged with supply events). source_type (added 2026-08-10,
+    CONTEXT_HANDOFF_v2.md §7m) is "Direct Sale" when mat_code equals
+    the order's own ordered item — unambiguous, since explode_bom()
+    never returns a real BOM parent's own code, only leaves, so that
+    equality can only hold for a genuine direct-sale leaf — and "BOM
+    Explosion" otherwise. Real and visible (surfaced through
+    get_procurement_recommendations()'s own contributing_refs, which
+    the "Show Source" toggle in mfg_ui.py already renders), but doesn't
+    yet change how any event is summed or prioritized — see §7m for the
+    real design fork this resolved.
     """
     fpath = data_file or DATA_FILE
     events = {}
@@ -416,8 +452,9 @@ def _batch_demand_events(data_file=None):
         exploded = explode_bom(o["mat_code"], o["qty"], fpath)
         loc = o["delivery_location"] or "Unspecified"
         for mat_code, qty in exploded.items():
+            source_type = "Direct Sale" if mat_code == o["mat_code"] else "BOM Explosion"
             events.setdefault((mat_code, loc), []).append(
-                (o["requested_delivery_date"], qty, o["so_id"]))
+                (o["requested_delivery_date"], qty, o["so_id"], source_type))
     return events
 
 
@@ -507,9 +544,12 @@ def project_position(mat_code, location, horizon_days=None, data_file=None,
     for d, qty, ref in supply_events.get((mat_code, location), []):
         if d <= horizon_cutoff:
             events.append((d, 0, qty, "supply", ref))   # tie-break rank 0 — before demand
-    for d, qty, ref in demand_events.get((mat_code, location), []):
+    for d, qty, ref, source_type in demand_events.get((mat_code, location), []):
         if d <= horizon_cutoff:
-            events.append((d, 1, -qty, "demand", ref))  # tie-break rank 1 — after supply
+            # source_type folded into the label here, not a new column —
+            # this trajectory is only ever displayed as {date, balance,
+            # event}, so this is the one place it can actually surface.
+            events.append((d, 1, -qty, f"demand ({source_type})", ref))  # tie-break rank 1 — after supply
     events.sort(key=lambda e: (e[0], e[1]))
 
     running = starting_balance
@@ -699,10 +739,24 @@ def get_procurement_recommendations(data_file=None):
 
     Returns a list of {mat_code, mat_desc, location, remaining_gap,
     stockout_date, days_until_stockout, pipeline_lead_time_days,
-    lead_time_source, outcome} where outcome is one of 'At Risk',
-    'Already Covered by Existing PR/PO', or 'Action Needed' — the last
-    of these also carries recommended_qty and required_by_date, ready
-    to hand straight to PR-US-01.
+    lead_time_source, outcome, contributing_refs} where outcome is one
+    of 'At Risk', 'Already Covered by Existing PR/PO', or 'Action
+    Needed' — the last of these also carries recommended_qty and
+    required_by_date, ready to hand straight to PR-US-01.
+
+    contributing_refs is a list of {"ref": ..., "source_type": ...}
+    dicts (changed from bare ref strings 2026-08-10, CONTEXT_HANDOFF_v2.md
+    §7m) — ref is a Sales Order ID in the default mode, or a
+    'REORDER-QTY-ASSUMED-cycleN' tag in Reorder Qty Based mode; source_type
+    is "Direct Sale", "BOM Explosion", or "Reorder Policy", the same tag
+    _batch_demand_events()/_reorder_qty_demand_events() already carry on
+    each event, just surfaced here rather than discarded after
+    aggregation, deduplicated by the (ref, source_type) pair rather than
+    by ref alone (one SO can genuinely contribute both ways at once).
+    Always [] in Optimize Existing PRs mode, since that mode's dispatcher
+    deliberately returns no demand events at all. Purely additive/optional
+    for callers — a UI can show or hide it without needing to recompute
+    anything.
     """
     import pr_consolidation as pc
     fpath = data_file or DATA_FILE
@@ -753,10 +807,22 @@ def get_procurement_recommendations(data_file=None):
         lt = pc.get_procurement_lead_time(p["mat_code"], fpath)
         pipeline_days = lt["lead_time_days"]
 
+        # (ref, source_type) kept as distinct pairs, not deduplicated down
+        # to bare refs — a single SO can genuinely contribute to the same
+        # (material, location) demand two different ways at once (e.g. a
+        # spare battery ordered directly on one line, another Bandicoot
+        # ordered on another line whose own BOM explosion also needs a
+        # battery), and collapsing to just the ref would silently lose
+        # that real distinction.
+        contributing_refs = [{"ref": ref, "source_type": source_type} for ref, source_type in
+                             sorted({(ref, source_type) for _, _, ref, source_type
+                                    in demand_events.get(key, [])})]
+
         row = {"mat_code": p["mat_code"], "mat_desc": p["mat_desc"], "location": p["location_id"],
                "remaining_gap": remaining_gap, "stockout_date": proj["stockout_date"],
                "days_until_stockout": days_until_stockout,
-               "pipeline_lead_time_days": pipeline_days, "lead_time_source": lt["source"]}
+               "pipeline_lead_time_days": pipeline_days, "lead_time_source": lt["source"],
+               "contributing_refs": contributing_refs}
 
         if pipeline_days is None or days_until_stockout < pipeline_days:
             row["outcome"] = "At Risk"
@@ -842,7 +908,7 @@ def get_pr_optimization_analysis(data_file=None):
                 row["shortfall_days"] = 0
         sufficiency.append(row)
 
-    duplicates = [{"mat_code": k[0], "location": k[1],
+    duplicates = [{"mat_code": k[0], "mat_desc": v[0]["mat_desc"], "location": k[1],
                    "competing_lines": [{"pr_number": l["pr_number"], "pr_line": l["pr_line"],
                                         "qty": l["qty"], "required_date": l["req_date"]}
                                        for l in v]}

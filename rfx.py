@@ -42,6 +42,7 @@ from collections import defaultdict
 import pr_consolidation as pc  # reuse PO-writing / PR-writeback / style helpers
 import db
 import vendor_onboarding as vo
+import vendor_scorecard as vsc
 import po_export
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.xlsx")
@@ -174,11 +175,31 @@ def list_vendors(data_file=None):
     return _read_vendor_master()
 
 
-def _rank_vendors_for_line(rfp_row, vendors, cat_lookup, affinity, top_n=5):
+def _vendor_scorecard_lookup(vendors, data_file=None):
+    """Loaded once per suggestion batch, same reasoning as affinity/
+    cat_lookup below — computing a full scorecard per vendor inside the
+    per-line ranking loop would multiply this by every RFP line in the
+    batch, the exact cost class suggest_vendors_for_lines() below
+    already had to fix once for affinity. Real cost at this PoC's own
+    stated real-world scale (400+ active vendors) isn't optimized here
+    — a real production version would cache these, not recompute on
+    every RFx page render."""
+    return {v["id"]: vsc.get_vendor_scorecard(v["id"], data_file) for v in vendors}
+
+
+def _rank_vendors_for_line(rfp_row, vendors, cat_lookup, affinity, scorecards, top_n=5):
     """Pure computation, no file I/O — given already-loaded vendor/category/
-    affinity data, ranks vendors for one RFP line. Both suggest_vendors()
-    and suggest_vendors_for_lines() share this, so the ranking logic only
-    exists once."""
+    affinity/scorecard data, ranks vendors for one RFP line. Both
+    suggest_vendors() and suggest_vendors_for_lines() share this, so the
+    ranking logic only exists once.
+
+    Scorecard data is attached for display only — deliberately not
+    folded into the sort `score` itself. Affinity + proximity answers
+    "who can genuinely supply this, from where," a factual question;
+    a scorecard answers "how have they performed," a judgment call
+    that's a Buyer's own to weigh, especially since a Low Volume score
+    is real but thin (see vendor_scorecard.py's own docstring) and
+    shouldn't silently outrank a genuinely well-matched cold vendor."""
     category, _ = cat_lookup.get(rfp_row["mat_code"], ("", ""))
     cat_scores = affinity.get(category, {})
     deliv_ll = _parse_ll(rfp_row.get("deliv_geo"))
@@ -194,8 +215,11 @@ def _rank_vendors_for_line(rfp_row, vendors, cat_lookup, affinity, top_n=5):
             reasons.append(f"supplies {category} ({aff_count} SKU history)")
         if dist_km is not None:
             reasons.append(f"{dist_km:,.0f} km from delivery point")
+        card = scorecards.get(v["id"], {})
         ranked.append({**v, "distance_km": dist_km, "affinity": aff_count,
-                        "score": score, "reason": "; ".join(reasons) or "no history — cold outreach"})
+                        "score": score, "reason": "; ".join(reasons) or "no history — cold outreach",
+                        "scorecard_score": card.get("overall_score"),
+                        "scorecard_low_volume": card.get("low_volume", False)})
     ranked.sort(key=lambda x: x["score"])
     return ranked[:top_n]
 
@@ -205,7 +229,8 @@ def suggest_vendors(rfp_row, data_file=None, top_n=5):
     vendors = _read_vendor_master()
     cat_lookup = _item_category_lookup()
     affinity = _category_vendor_affinity()
-    return _rank_vendors_for_line(rfp_row, vendors, cat_lookup, affinity, top_n)
+    scorecards = _vendor_scorecard_lookup(vendors, data_file)
+    return _rank_vendors_for_line(rfp_row, vendors, cat_lookup, affinity, scorecards, top_n)
 
 
 def suggest_vendors_for_lines(rfp_rows, data_file=None, top_n=6):
@@ -226,10 +251,11 @@ def suggest_vendors_for_lines(rfp_rows, data_file=None, top_n=6):
     vendors = _read_vendor_master()
     cat_lookup = _item_category_lookup()
     affinity = _category_vendor_affinity()
+    scorecards = _vendor_scorecard_lookup(vendors, data_file)
 
     totals = defaultdict(float); counts = defaultdict(int); meta = {}
     for row in rfp_rows:
-        for v in _rank_vendors_for_line(row, vendors, cat_lookup, affinity, top_n=20):
+        for v in _rank_vendors_for_line(row, vendors, cat_lookup, affinity, scorecards, top_n=20):
             totals[v["id"]] += v["score"]
             counts[v["id"]] += 1
             meta[v["id"]] = v
@@ -496,6 +522,90 @@ def record_quote(rfp_number, vendor_id, vendor_name, price, lead_time_days,
         data_file)[0]
 
 
+# ── Clarifications: ask a vendor a follow-up question before deciding ───────────
+def _next_clarification_id(conn):
+    rows = conn.execute(
+        "SELECT clarification_id FROM rfx_clarifications WHERE clarification_id LIKE 'CLR-%'"
+    ).fetchall()
+    mx = 0
+    for r in rows:
+        try: mx = max(mx, int(r["clarification_id"].split("-")[1]))
+        except Exception: pass
+    return f"CLR-{mx+1:05d}"
+
+
+def request_clarification(rfp_number, vendor_id, vendor_name, question, quote_id=None,
+                          requested_by="", data_file=None):
+    """
+    Records a follow-up question sent to a vendor about one RFP line —
+    optionally pinned to an already-submitted quote_id. Built directly
+    against a real Genrobotics pain point: comparing quotes sometimes
+    surfaces a question worth asking before committing to a winner, and
+    until now there was no way to even record that a question was
+    asked, let alone track the answer next to the quote it's about.
+
+    Deliberately doesn't gate select_winner() or anything else — this is
+    a record-keeping/visibility feature, not a workflow block. A buyer
+    can still select a winner with a clarification outstanding if they
+    choose to; the point is making the question and its answer visible,
+    not enforcing a wait no one asked for.
+    """
+    db.init_schema()
+    conn = db.get_connection()
+    try:
+        cid = _next_clarification_id(conn)
+        conn.execute(
+            "INSERT INTO rfx_clarifications (clarification_id, rfp_number, vendor_id, "
+            "vendor_name, quote_id, question, requested_date, requested_by, status, "
+            "answer, answered_date) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (cid, rfp_number, vendor_id, vendor_name, quote_id or "", question,
+             date.today().strftime("%Y-%m-%d"), requested_by, "Sent", "", ""),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return cid
+
+
+def get_clarifications(rfp_number=None, vendor_id=None, quote_id=None, data_file=None):
+    conn = db.get_connection()
+    try:
+        rows = conn.execute("SELECT * FROM rfx_clarifications ORDER BY clarification_id").fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        row = {"clarification_id": r["clarification_id"], "rfp_number": r["rfp_number"],
+               "vendor_id": r["vendor_id"], "vendor_name": r["vendor_name"],
+               "quote_id": r["quote_id"], "question": r["question"],
+               "requested_date": r["requested_date"], "requested_by": r["requested_by"],
+               "status": r["status"], "answer": r["answer"], "answered_date": r["answered_date"]}
+        if rfp_number and row["rfp_number"] != rfp_number:
+            continue
+        if vendor_id and row["vendor_id"] != vendor_id:
+            continue
+        if quote_id and row["quote_id"] != quote_id:
+            continue
+        out.append(row)
+    return out
+
+
+def record_clarification_response(clarification_id, answer, data_file=None):
+    """Records the vendor's answer — same 'record what happened, don't
+    validate it' pattern the rest of this module already uses for
+    quotes and invitations."""
+    conn = db.get_connection()
+    try:
+        conn.execute(
+            "UPDATE rfx_clarifications SET answer=?, status=?, answered_date=? "
+            "WHERE clarification_id=?",
+            (answer, "Answered", date.today().strftime("%Y-%m-%d"), clarification_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _simulate_price_and_terms(rfp_row, vendor_id, base_price, seed_salt="v1"):
     h = int(hashlib.sha1(f"{rfp_row['rfp_number']}-{vendor_id}-{seed_salt}".encode()).hexdigest(), 16)
     price_variance = 0.85 + (h % 31) / 100.0   # 0.85x .. 1.15x
@@ -713,11 +823,14 @@ def stats(data_file=None):
     try:
         n_quotes = conn2.execute("SELECT COUNT(*) FROM rfx_quotes").fetchone()[0]
         n_invites = conn2.execute("SELECT COUNT(*) FROM rfx_invitations").fetchone()[0]
+        n_clarifications_open = conn2.execute(
+            "SELECT COUNT(*) FROM rfx_clarifications WHERE status='Sent'").fetchone()[0]
     finally:
         conn2.close()
     return {"total_rfps": total, "open": counts.get("Open", 0),
             "pending_po": counts.get("Selected", 0), "awarded": counts.get("Awarded", 0),
-            "quotes": n_quotes, "invitations": n_invites}
+            "quotes": n_quotes, "invitations": n_invites,
+            "clarifications_open": n_clarifications_open}
 
 
 if __name__ == "__main__":

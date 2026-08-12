@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>ERP PoC — Combined View</title>
+<title>AutonoVerse Garage — Combined View</title>
 <style>
   * { box-sizing: border-box; }
   html, body {
@@ -75,7 +75,7 @@
   <div id="layout">
     <div id="lhs">
       <div id="tabbar">
-        <button id="tab-s2c" class="active" onclick="switchApp('s2c')">S2C — Source to Pay</button>
+        <button id="tab-s2c" class="active" onclick="switchApp('s2c')">S2C — Source to Contract</button>
         <button id="tab-mfg" onclick="switchApp('mfg')">MFG — Manufacturing</button>
         <button id="tab-o2c" onclick="switchApp('o2c')">O2C — Order to Cash</button>
       </div>
@@ -121,6 +121,20 @@
         var base = frame.src.split('?')[0];
         frame.src = base + '?_refresh=' + Date.now();
       }
+    }
+    // Agent Console screen-navigation links (2026-08-11): the RHS
+    // console can't reach the LHS iframe directly (different origin,
+    // different port per app), so it posts here instead -- the same
+    // real channel erp_action_approved above already established, new
+    // message type. Switches the LHS pane to the requested app+page
+    // and updates the tab bar to match, exactly what clicking that
+    // app's own tab already does, just driven by the console instead
+    // of a click here.
+    if (event.data && event.data.type === 'erp_navigate' && PORTS.hasOwnProperty(event.data.app)) {
+      document.getElementById('lhs-frame').src = event.data.url;
+      ['s2c', 'mfg', 'o2c'].forEach(function(a) {
+        document.getElementById('tab-' + a).classList.toggle('active', a === event.data.app);
+      });
     }
   });
 </script>

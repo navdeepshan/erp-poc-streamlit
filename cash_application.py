@@ -62,6 +62,7 @@ import db
 import billing as bl
 import customer_onboarding as co
 import accounting as acct
+import rma
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.xlsx")
 
@@ -140,16 +141,22 @@ def get_invoice_payment_info(invoice_id, data_file=None):
     applications = [a for a in get_payment_applications(invoice_id=invoice_id, data_file=fpath)
                     if a["invoice_id"] != ADVANCE_SENTINEL]
     paid = round(sum(a["applied_amount"] for a in applications), 2)
-    balance_due = round(inv["grand_total"] - paid, 2)
+    # RMA-US-04's own credit memos reduce what's genuinely still owed on this
+    # invoice, the same way a payment does — read live from credit_memos
+    # (rma.py's own authoritative source) rather than a second, separately-
+    # maintained AR figure that could drift from it.
+    credited = round(sum(cm["credit_total"] for cm in rma.get_credit_memos(
+        invoice_id=invoice_id, data_file=fpath)), 2)
+    balance_due = round(inv["grand_total"] - paid - credited, 2)
     if inv["status"] == "Cancelled":
         payment_status = "N/A (Cancelled)"
     elif balance_due <= 0:
-        payment_status = "Paid"
-    elif paid > 0:
+        payment_status = "Paid" if credited == 0 or paid > 0 else "Credited"
+    elif paid > 0 or credited > 0:
         payment_status = "Partially Paid"
     else:
         payment_status = "Unpaid"
-    return {"grand_total": inv["grand_total"], "paid_amount": paid,
+    return {"grand_total": inv["grand_total"], "paid_amount": paid, "credited_amount": credited,
             "balance_due": balance_due, "payment_status": payment_status}
 
 

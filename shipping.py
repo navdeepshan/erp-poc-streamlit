@@ -8,25 +8,35 @@ not a live API connector) — all explicitly deferred to a later pass,
 not overlooked. COURIERS below is a list of one specifically so
 extending it later is a one-line change, not a redesign.
 
+Generalized 2026-08-08 (LOG-US-01/FUL-US-05 connection): this module's
+booking/tracking/export logic was, until now, reachable only from the
+internal stock-transfer screen (INV-US-05) — every function took a real
+`inventory.stock_transfers` row shape specifically. The design note
+below (left as-is, historical) already anticipated exactly this need:
+O2C shipping to an external customer, where the consignee is a real
+customer address, not one of this org's own Delivery Locations, and
+there's no `stock_transfers` row underneath it at all.
+
+The fix landed as a `kind` registry (_KINDS below), not a rewrite of the
+proven internal-transfer path: `build_shipment_details()` (stock
+transfer) and the new `build_customer_shipment_details()` (O2C
+fulfillment) are now two adapters feeding the SAME
+`generate_shipping_excel()` / `submit_batch_to_courier()` /
+`get_tracking_status()` / `skip_ahead_tracking()` functions, selected by
+a `kind` parameter that defaults to `"stock_transfer"` — every existing
+call site (mfg_ui.py's Ship / Position & Transfers screen) keeps working
+completely unchanged. Route consolidation, least-cost carrier selection,
+weight-slab pricing, and the rate cards themselves are shared as-is;
+only the "which table do I read/write, and how do I build a shipment
+dict from it" indirection is new.
+
 DESIGN NOTE for real (credentialed) implementation, flagged directly
-per request, not yet acted on — this module's real design constraint
-going forward is reuse, not just this one screen. Right now every
-function here takes a real `inventory.stock_transfers` row shape
-specifically (internal location-to-location movement). A real courier
-integration needs the SAME booking/tracking/Excel-export logic
-reachable from other screens with a genuinely different shipment
-shape later — most concretely, O2C shipping to an external customer
-(consignee is a real customer address, not one of this org's own
-locations; there's no `stock_transfers` row underneath it at all).
-The real fix when that work starts: a thin, shared "shippable" shape
-(consignor, consignee, cargo, courier, reference — already close to
-what build_shipment_details() returns today) that BOTH a stock
-transfer AND a customer fulfillment can be adapted into, with
-`build_shipment_details()` becoming one adapter among others feeding
-the same `generate_shipping_excel()` / `submit_to_courier()` /
-`get_tracking_status()` functions, rather than duplicating booking/
-tracking/export logic per screen. Not built now — noted so it isn't
-designed away by accident later.
+per request, not yet acted on — a real courier integration needs the
+same reuse discipline, but against a real network call: swapping in a
+real BlueDart/Delhivery connection later means replacing the single
+`requests.post(...)` line noted in submit_to_courier()'s own docstring,
+not redesigning the data flow around it. Not built now — noted so it
+isn't designed away by accident later.
 """
 
 import re
@@ -174,6 +184,107 @@ def build_shipment_details(transfer, data_file=None):
     }
 
 
+def build_customer_shipment_details(fulfillment, data_file=None):
+    """
+    fulfillment: a real row from fulfillment.get_fulfillment() — the
+    external-consignee counterpart to build_shipment_details() above,
+    per LOG-US-01's own documented generalization (S2S V1.15 / O2C
+    V1.9): the consignee is resolved from the real customer master
+    record (CUST-US-01), never from this org's own Delivery_Locations
+    network — that network is this org's own supply-side Plants, not a
+    genuine customer address (see CLAUDE.md's own documented
+    conflation note on Sales Order delivery_location; this function
+    deliberately does not reuse it for the consignee side, only for
+    the consignor/fulfilling-Plant side, where it's genuinely correct).
+
+    Consignee state is resolved from the customer's own GSTIN via the
+    same vendor_onboarding.validate_gstin() state-code lookup
+    billing.py already relies on for GST determination — one real
+    state-resolution mechanism, not a second, free-text-parsed one.
+
+    A fulfillment can carry more than one material (unlike a stock
+    transfer, which is always single-material) — cargo fields that
+    only make sense per-line (Material Code, Product Description, HSN
+    Code) are honestly summarized across lines rather than picking
+    just the first one; HSN Code is left blank if lines don't share a
+    single one, the same "honest blank over a wrong number" principle
+    _extract_pincode() already uses. Weight and value are real
+    aggregate sums across every shipped line — if ANY line's weight is
+    unknown (Item Master's weight_kg unset), the aggregate is honestly
+    None rather than a partial, understated total.
+    """
+    import customer_onboarding as co
+    import vendor_onboarding as vo
+    import fulfillment as ful
+
+    org = op.get_org_profile(data_file) or {}
+    locs = _location_lookup(data_file)
+    from_loc = locs.get(fulfillment["delivery_location"], {})
+    customer = co.get_customer(fulfillment["customer_id"], data_file=data_file) or {}
+
+    consignee_state = ""
+    if customer.get("GSTIN"):
+        ok, _, details = vo.validate_gstin(customer["GSTIN"])
+        if ok:
+            consignee_state = details["state_name"]
+
+    items = ful.get_fulfillment_items(fulfillment["fulfillment_id"], data_file=data_file)
+    shipped_items = [it for it in items if (it["qty_shipped"] or 0) > 0]
+
+    total_weight = 0.0
+    weight_known = True
+    total_value = 0.0
+    mat_codes, descriptions, hsn_codes, uoms = [], [], [], set()
+    total_qty = 0.0
+    for it in shipped_items:
+        qty = float(it["qty_shipped"] or 0)
+        total_qty += qty
+        item = po_export.get_item_by_code(it["mat_code"], active_only=False) or {}
+        w = item.get("weight_kg")
+        if w is None:
+            weight_known = False
+        else:
+            total_weight += w * qty
+        total_value += (item.get("price") or 0) * qty
+        mat_codes.append(it["mat_code"])
+        descriptions.append(f"{it['mat_desc']} x {qty:g}")
+        if item.get("hsn_code"):
+            hsn_codes.append(item["hsn_code"])
+        uoms.add(it["uom"])
+
+    single_line = len(shipped_items) == 1
+    hsn_common = hsn_codes[0] if hsn_codes and len(set(hsn_codes)) == 1 else ""
+    uom_common = next(iter(uoms)) if len(uoms) == 1 else "Mixed"
+
+    return {
+        "Shipment Reference": fulfillment["fulfillment_id"],
+        "Courier": fulfillment.get("carrier") or "BlueDart",
+        "Ship Date": fulfillment.get("shipped_date") or date.today().strftime("%Y-%m-%d"),
+        "Mode": "Surface",
+        "Consignor Name": org.get("Legal_Name", ""),
+        "Consignor Address": from_loc.get("address", ""),
+        "Consignor City": from_loc.get("city", ""),
+        "Consignor State": from_loc.get("state", ""),
+        "Consignor Pincode": _extract_pincode(from_loc.get("address", ""), from_loc.get("city", "")),
+        "Consignor Contact": org.get("Contact_Phone", ""),
+        "Consignee Name": customer.get("Customer_Name", ""),
+        "Consignee Address": customer.get("Address", ""),
+        "Consignee City": customer.get("City", ""),
+        "Consignee State": consignee_state,
+        "Consignee Pincode": _extract_pincode(customer.get("Address", ""), customer.get("City", "")),
+        "Consignee Contact": customer.get("Contact_Phone", ""),
+        "Material Code": mat_codes[0] if single_line else ", ".join(mat_codes),
+        "Product Description": descriptions[0].rsplit(" x ", 1)[0] if single_line else "; ".join(descriptions),
+        "HSN Code": hsn_common,
+        "Quantity": total_qty,
+        "UOM": uom_common,
+        "Pieces": int(total_qty) if total_qty == int(total_qty) else total_qty,
+        "Weight per Unit (kg)": (total_weight / total_qty) if (single_line and weight_known and total_qty) else None,
+        "Total Weight (kg)": round(total_weight, 2) if weight_known else None,
+        "Declared Value (INR)": round(total_value, 2),
+    }
+
+
 def generate_shipping_excel(shipment):
     """
     One real shipment -> one formatted .xlsx, laid out as a real
@@ -194,10 +305,10 @@ def generate_shipping_excel(shipment):
     label_font = Font(name="Arial", bold=True)
     value_font = Font(name="Arial")
 
-    ws["A1"] = f"{shipment['Courier']} \u2014 Shipment Booking Details"
+    ws["A1"] = f"{shipment['Courier']} — Shipment Booking Details"
     ws["A1"].font = title_font
     ws.merge_cells("A1:B1")
-    ws["A2"] = f"Reference: {shipment['Shipment Reference']}  \u00b7  Generated: " \
+    ws["A2"] = f"Reference: {shipment['Shipment Reference']}  ·  Generated: " \
               f"{date.today().strftime('%Y-%m-%d')}"
     ws["A2"].font = Font(name="Arial", italic=True, size=9, color="666666")
     ws.merge_cells("A2:B2")
@@ -224,7 +335,7 @@ def generate_shipping_excel(shipment):
             c2 = ws.cell(row=row, column=2, value=shipment.get(f, ""))
             c2.font = value_font
             if "Value" in f:
-                c2.number_format = "\u20b9#,##0.00"
+                c2.number_format = "₹#,##0.00"
             row += 1
         row += 1
 
@@ -450,7 +561,88 @@ def _resolve_courier_and_bins(legs, pinned_courier=None):
     return bookings, unbookable
 
 
-def submit_batch_to_courier(transfer_ids, data_file=None):
+# ── Kind registry: lets ONE shared booking/tracking implementation serve
+# more than one real shipment source ──────────────────────────────────────
+# "stock_transfer" (INV-US-05, the original) and "customer_fulfillment"
+# (FUL-US-05, new) each need their own way to fetch a leg, build its
+# shipment dict, and persist tracking back — everything downstream of that
+# (route consolidation, least-cost selection, AWB generation, the tracking
+# simulation) is identical, so it's written once, not twice. A generic leg
+# dict always carries from_location/to_location/transfer_id keys regardless
+# of kind (transfer_id doubles as "whatever this shipment's own real
+# reference id is" — a fulfillment_id here, not a misnomer, just the one
+# generic key name every downstream line already uses).
+
+def _get_stock_transfer_leg(ref_id, data_file=None):
+    import inventory as inv
+    return inv.get_stock_transfer(ref_id, data_file=data_file)
+
+
+def _get_customer_fulfillment_leg(ref_id, data_file=None):
+    import fulfillment as ful
+    f = ful.get_fulfillment(ref_id, data_file=data_file)
+    if f is None:
+        return None
+    f = dict(f)
+    f["from_location"] = f["delivery_location"]
+    f["to_location"] = f["customer_id"]  # consignee identity, for route-grouping only
+    f["transfer_id"] = f["fulfillment_id"]  # generic ref-id key, reused by every line below
+    return f
+
+
+def _update_stock_transfer_tracking(ref_id, awb, carrier, data_file=None):
+    import inventory as inv
+    inv.update_transfer_tracking(ref_id, awb, carrier=carrier, data_file=data_file)
+
+
+def _update_customer_fulfillment_tracking(ref_id, awb, carrier, data_file=None):
+    import fulfillment as ful
+    ful.update_dispatch_tracking(ref_id, awb, carrier=carrier, data_file=data_file)
+
+
+def _update_stock_transfer_shipdate_by_awb(awb, new_date, data_file=None):
+    import db
+    conn = db.get_connection()
+    try:
+        conn.execute(
+            "UPDATE stock_transfers SET shipped_date=? WHERE tracking_ref=? AND "
+            "tracking_ref IS NOT NULL AND tracking_ref != ''",
+            (str(new_date), awb))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _update_customer_fulfillment_shipdate_by_awb(awb, new_date, data_file=None):
+    import db
+    conn = db.get_connection()
+    try:
+        conn.execute(
+            "UPDATE fulfillments SET shipped_date=? WHERE tracking_ref=? AND "
+            "tracking_ref IS NOT NULL AND tracking_ref != ''",
+            (str(new_date), awb))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_KINDS = {
+    "stock_transfer": {
+        "get_leg": _get_stock_transfer_leg,
+        "build_details": build_shipment_details,
+        "update_tracking": _update_stock_transfer_tracking,
+        "update_shipdate_by_awb": _update_stock_transfer_shipdate_by_awb,
+    },
+    "customer_fulfillment": {
+        "get_leg": _get_customer_fulfillment_leg,
+        "build_details": build_customer_shipment_details,
+        "update_tracking": _update_customer_fulfillment_tracking,
+        "update_shipdate_by_awb": _update_customer_fulfillment_shipdate_by_awb,
+    },
+}
+
+
+def submit_batch_to_courier(ref_ids, kind="stock_transfer", data_file=None):
     """
     The real LOG-US-01 entry point: books one or more shipment legs
     together, applying real route consolidation and weight-slab-aware
@@ -459,8 +651,13 @@ def submit_batch_to_courier(transfer_ids, data_file=None):
     now delegates here with a one-element batch, so both paths share one
     real implementation, not two that could drift.
 
-    Each transfer's own `carrier` field (set at Ship time) is treated as
-    a pinned preference; a transfer shipped with no carrier recorded (an
+    kind selects which real source these ref_ids come from — internal
+    stock transfers (default, unchanged behavior) or O2C customer
+    fulfillments (see _KINDS above) — everything else about this
+    function is identical either way.
+
+    Each leg's own `carrier` field (set at Ship time) is treated as a
+    pinned preference; a leg shipped with no carrier recorded (an
     empty string) is left for this function's own least-cost proposal.
     Legs are only ever grouped when they share both consignor and
     consignee location AND the same pinned-courier-or-none status --
@@ -468,18 +665,18 @@ def submit_batch_to_courier(transfer_ids, data_file=None):
     share one booking, since a real waybill is with exactly one courier.
 
     Returns a list of per-booking-group results, each carrying its own
-    real AWB, courier, the real transfer_ids it covers, and each
-    transfer's own proportional share of that booking's real cost.
+    real AWB, courier, the real ref ids it covers, and each leg's own
+    proportional share of that booking's real cost.
     """
-    import inventory as inv
     from datetime import datetime, timedelta
 
+    handlers = _KINDS[kind]
     legs = []
-    for tid in transfer_ids:
-        t = inv.get_stock_transfer(tid, data_file=data_file)
+    for rid in ref_ids:
+        t = handlers["get_leg"](rid, data_file=data_file)
         if t is None or t.get("tracking_ref"):
             continue  # already booked or doesn't exist -- caller reports these separately
-        shipment = build_shipment_details(t, data_file=data_file)
+        shipment = handlers["build_details"](t, data_file=data_file)
         weight = shipment.get("Total Weight (kg)")
         if weight is None:
             continue  # no resolvable weight -- caller reports this separately
@@ -515,8 +712,7 @@ def submit_batch_to_courier(transfer_ids, data_file=None):
                 leg_shares = []
                 for l in bin_legs:
                     share = round(cost * (l["_weight"] / total_weight), 2) if total_weight else 0
-                    inv.update_transfer_tracking(l["transfer_id"], awb, carrier=courier,
-                                                 data_file=data_file)
+                    handlers["update_tracking"](l["transfer_id"], awb, courier, data_file=data_file)
                     leg_shares.append({"transfer_id": l["transfer_id"], "weight_kg": l["_weight"],
                                        "freight_share": share})
 
@@ -530,7 +726,7 @@ def submit_batch_to_courier(transfer_ids, data_file=None):
     return {"bookings": results, "unbookable": unbookable_out}
 
 
-def submit_to_courier(shipment, data_file=None):
+def submit_to_courier(shipment, kind="stock_transfer", data_file=None):
     """
     SIMULATED submission for a single shipment -- a thin convenience
     wrapper around submit_batch_to_courier() (the real, shared LOG-US-01
@@ -547,25 +743,24 @@ def submit_to_courier(shipment, data_file=None):
     the same shape this function has always returned, even though the
     real work now happens in the batch function.
     """
-    import inventory as inv
-
-    transfer_id = shipment["Shipment Reference"]
-    existing = inv.get_stock_transfer(transfer_id, data_file=data_file)
+    handlers = _KINDS[kind]
+    ref_id = shipment["Shipment Reference"]
+    existing = handlers["get_leg"](ref_id, data_file=data_file)
     already_submitted = bool(existing and existing.get("tracking_ref"))
     if already_submitted:
         courier = existing["carrier"] or "BlueDart"
         payload = PAYLOAD_BUILDERS.get(courier, build_bluedart_api_payload)(shipment)
-        tracking = get_tracking_status(transfer_id, data_file=data_file)
+        tracking = get_tracking_status(ref_id, kind=kind, data_file=data_file)
         response = {"awb_number": existing["tracking_ref"], "status": "Already Booked",
                    "estimated_delivery": (tracking or {}).get("checkpoints", [{}])[-1].get("date", ""),
                    "service_type": "Surface", "courier": courier}
         return {"request_payload": payload, "response": response, "already_submitted": True}
 
-    result = submit_batch_to_courier([transfer_id], data_file=data_file)
+    result = submit_batch_to_courier([ref_id], kind=kind, data_file=data_file)
     if result["unbookable"]:
         raise ValueError(result["unbookable"][0]["reason"])
     if not result["bookings"]:
-        raise ValueError(f"Could not book {transfer_id} -- no resolvable weight or courier.")
+        raise ValueError(f"Could not book {ref_id} -- no resolvable weight or courier.")
     r = result["bookings"][0]
     payload = PAYLOAD_BUILDERS.get(r["courier"], build_bluedart_api_payload)(shipment)
     response = {"awb_number": r["awb_number"], "status": "Booked",
@@ -574,7 +769,7 @@ def submit_to_courier(shipment, data_file=None):
     return {"request_payload": payload, "response": response, "already_submitted": False}
 
 
-def get_tracking_status(transfer_id, data_file=None):
+def get_tracking_status(ref_id, kind="stock_transfer", data_file=None):
     """
     SIMULATED tracking timeline — same reasoning as submit_to_courier():
     no real courier tracking API exists to call here. Deterministic
@@ -589,6 +784,9 @@ def get_tracking_status(transfer_id, data_file=None):
     tracking_ref/AWB on file) — there's nothing to track before a
     booking exists.
 
+    kind selects which real source ref_id comes from (see _KINDS) —
+    everything else about the simulation is identical either way.
+
     The five checkpoint stages are spaced proportionally across
     whichever courier's own real transit_days applies (e.g. Delhivery's
     3-day service compresses two stages onto the same day rather than
@@ -602,17 +800,17 @@ def get_tracking_status(transfer_id, data_file=None):
     Returns {"awb_number", "current_status", "checkpoints": [
     {"day", "label", "location", "date", "completed"}, ...]}.
     """
-    import inventory as inv
     from datetime import datetime, timedelta, date as date_cls
 
-    transfer = inv.get_stock_transfer(transfer_id, data_file=data_file)
+    handlers = _KINDS[kind]
+    transfer = handlers["get_leg"](ref_id, data_file=data_file)
     if not transfer or not transfer.get("tracking_ref"):
         return None
 
     courier = transfer.get("carrier") or "BlueDart"
     transit_days = RATE_CARDS.get(courier, RATE_CARDS["BlueDart"])["transit_days"]
 
-    shipment = build_shipment_details(transfer, data_file=data_file)
+    shipment = handlers["build_details"](transfer, data_file=data_file)
     ship_date = datetime.strptime(shipment["Ship Date"], "%Y-%m-%d").date()
     days_elapsed = max(0, (date_cls.today() - ship_date).days)
     days_elapsed = min(days_elapsed, transit_days)
@@ -620,7 +818,7 @@ def get_tracking_status(transfer_id, data_file=None):
     stage_fractions = [
         (0.0, "Booked", shipment["Consignor City"]),
         (0.25, "Picked Up", shipment["Consignor City"]),
-        (0.5, "In Transit", f"{shipment['Consignor City']} \u2192 {shipment['Consignee City']}"),
+        (0.5, "In Transit", f"{shipment['Consignor City']} → {shipment['Consignee City']}"),
         (0.75, "Arrived at Destination Hub", shipment["Consignee City"]),
         (1.0, None, shipment["Consignee City"]),  # label resolved below
     ]
@@ -650,7 +848,7 @@ def get_tracking_status(transfer_id, data_file=None):
     }
 
 
-def skip_ahead_tracking(transfer_id, data_file=None):
+def skip_ahead_tracking(ref_id, kind="stock_transfer", data_file=None):
     """
     A labeled demo control, not a second tracking mechanism: the real
     simulation in get_tracking_status() is deterministic from elapsed
@@ -664,22 +862,24 @@ def skip_ahead_tracking(transfer_id, data_file=None):
     unchanged, once every checkpoint is already complete (Delivered) --
     there is nothing further to advance to.
 
+    kind selects which real table (stock_transfers or fulfillments)
+    actually gets the adjusted ship date written back to it.
+
     Real bug fixed here, found by testing through an actual browser,
     not assumed correct from the single-transfer case working:
     consolidated shipments (submit_batch_to_courier()'s whole reason
-    to exist) share one AWB across more than one real transfer_id --
-    the same physical booking. Advancing only the one transfer_id whose
-    dialog happened to be open left its consolidated siblings behind
-    on the old date, so the same physical shipment could show two
-    different statuses depending on which row's AWB link someone
-    clicked. Every transfer sharing this transfer_id's own tracking_ref
-    now moves together, always.
+    to exist) share one AWB across more than one real ref id -- the
+    same physical booking. Advancing only the one ref id whose dialog
+    happened to be open left its consolidated siblings behind on the
+    old date, so the same physical shipment could show two different
+    statuses depending on which row's AWB link someone clicked. Every
+    leg sharing this ref id's own tracking_ref now moves together,
+    always.
     """
-    import db
-    import inventory as inv
-    from datetime import datetime, timedelta, date as date_cls
+    from datetime import timedelta, date as date_cls
 
-    status = get_tracking_status(transfer_id, data_file=data_file)
+    handlers = _KINDS[kind]
+    status = get_tracking_status(ref_id, kind=kind, data_file=data_file)
     if not status:
         return None
 
@@ -692,15 +892,6 @@ def skip_ahead_tracking(transfer_id, data_file=None):
         return status  # already fully Delivered -- nothing further to skip to
 
     new_ship_date = date_cls.today() - timedelta(days=next_day)
+    handlers["update_shipdate_by_awb"](status["awb_number"], new_ship_date, data_file=data_file)
 
-    conn = db.get_connection()
-    try:
-        conn.execute(
-            "UPDATE stock_transfers SET shipped_date=? WHERE tracking_ref=? AND "
-            "tracking_ref IS NOT NULL AND tracking_ref != ''",
-            (str(new_ship_date), status["awb_number"]))
-        conn.commit()
-    finally:
-        conn.close()
-
-    return get_tracking_status(transfer_id, data_file=data_file)
+    return get_tracking_status(ref_id, kind=kind, data_file=data_file)

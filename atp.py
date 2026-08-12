@@ -48,6 +48,9 @@ def check_and_promise_line(so_id, line_item, mat_code, mat_desc, location_id, qt
     if qty <= 0:
         raise ValueError("ATP check requires a positive quantity.")
 
+    import org_defaults as od
+    od.validate_atp_policy("ATP Sourcing Scope", data_file=data_file)
+
     result = res.create_reservation_up_to(mat_code, mat_desc, location_id, qty,
                                           so_id, so_line_item=line_item,
                                           notes=f"ATP-US-01 check at {so_id} confirmation",
@@ -74,3 +77,49 @@ def check_and_promise_line(so_id, line_item, mat_code, mat_desc, location_id, qt
         "reservation_id": result["reservation_id"],
         "backorder_id": backorder_id,
     }
+
+
+def get_live_line_status(so_item, data_file=None):
+    """
+    The real, current ATP state for one Sales Order line — not the
+    static snapshot check_and_promise_line() wrote once, at
+    confirmation. A real gap found and fixed here directly: nothing
+    ever revisited that snapshot afterward, so a line whose own real
+    Backorder had since been fully or partially fulfilled (by
+    reevaluate_backorders() on new supply arrival, or by a real
+    shipment resolving it directly via fulfillment.py's own record_
+    shipment()) still displayed its own original, stale outcome
+    indefinitely. Mirrors exactly how bom.py's own planning fix
+    already reads live Backorder state rather than the same stale
+    columns, for the same real reason.
+
+    so_item: one dict as returned by sales_order.get_order_items() --
+    needs its own qty, atp_outcome, and backorder_id.
+
+    Falls back to the line's own original, static values for a pre-ATP
+    order (atp_outcome is None), the same real fallback check_and_
+    promise_line()'s own caller already applies elsewhere.
+    """
+    if so_item.get("atp_outcome") is None:
+        return {"outcome": None, "promised_qty": None, "backordered_qty": None}
+
+    if not so_item.get("backorder_id"):
+        # Fully Promised at confirmation, nothing ever backordered --
+        # still accurate; there's no Backorder record to have since
+        # moved.
+        return {"outcome": "Promised", "promised_qty": so_item["qty"], "backordered_qty": 0.0}
+
+    live_bo = bo.get_backorder(so_item["backorder_id"], data_file=data_file)
+    live_backordered = (live_bo["open_qty"]
+                        if live_bo and live_bo["status"] in ("Open", "Partially Fulfilled")
+                        else 0.0)
+    live_promised = round(so_item["qty"] - live_backordered, 3)
+
+    if live_backordered <= 0.005:
+        outcome = "Promised"
+    elif live_promised <= 0.005:
+        outcome = "Backordered"
+    else:
+        outcome = "Partially Promised"
+
+    return {"outcome": outcome, "promised_qty": live_promised, "backordered_qty": live_backordered}

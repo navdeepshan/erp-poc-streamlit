@@ -7,9 +7,12 @@ fully migrated.
 
 ## Requirements
 ```
-pip install streamlit openpyxl pandas
+pip install streamlit openpyxl pandas reportlab
 ```
-(Python 3.10+ recommended; sqlite3 is stdlib.)
+(Python 3.10+ recommended; sqlite3 is stdlib. reportlab is used to
+generate the real, downloadable E-Way Bill PDF from the Position &
+Transfers screen — added alongside that feature; nothing else here
+depends on it.)
 
 ## Setup
 Put every file in this folder in the **same directory**.

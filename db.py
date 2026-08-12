@@ -162,7 +162,9 @@ CREATE TABLE IF NOT EXISTS item_master (
     active          TEXT,
     hsn_code        TEXT,
     gst_rate        REAL,
-    weight_kg       REAL
+    weight_kg       REAL,
+    tracking_type   TEXT DEFAULT 'None',
+    shelf_life_tracked TEXT DEFAULT 'No'
 );
 CREATE INDEX IF NOT EXISTS idx_item_active   ON item_master(active);
 CREATE INDEX IF NOT EXISTS idx_item_category ON item_master(category);
@@ -296,6 +298,23 @@ CREATE TABLE IF NOT EXISTS rfx_invitations (
 CREATE INDEX IF NOT EXISTS idx_rfxi_rfp    ON rfx_invitations(rfp_number);
 CREATE INDEX IF NOT EXISTS idx_rfxi_vendor ON rfx_invitations(vendor_id);
 
+CREATE TABLE IF NOT EXISTS rfx_clarifications (
+    clarification_id TEXT PRIMARY KEY,
+    rfp_number        TEXT,
+    vendor_id         TEXT,
+    vendor_name       TEXT,
+    quote_id          TEXT,
+    question          TEXT,
+    requested_date    TEXT,
+    requested_by      TEXT,
+    status            TEXT,
+    answer            TEXT,
+    answered_date     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rfxc_rfp    ON rfx_clarifications(rfp_number);
+CREATE INDEX IF NOT EXISTS idx_rfxc_vendor ON rfx_clarifications(vendor_id);
+CREATE INDEX IF NOT EXISTS idx_rfxc_status ON rfx_clarifications(status);
+
 CREATE TABLE IF NOT EXISTS purchase_bundles (
     bundle_id    TEXT PRIMARY KEY,
     bundle_name  TEXT NOT NULL,
@@ -369,6 +388,138 @@ CREATE TABLE IF NOT EXISTS quality_inspections (
 );
 CREATE INDEX IF NOT EXISTS idx_qi_gr ON quality_inspections(gr_id);
 CREATE INDEX IF NOT EXISTS idx_qi_po ON quality_inspections(po_number);
+
+CREATE TABLE IF NOT EXISTS quality_holds (
+    hold_id          TEXT PRIMARY KEY,
+    qi_id            TEXT,
+    gr_id            TEXT,
+    po_number        TEXT,
+    po_item          INTEGER,
+    material_code    TEXT,
+    material_desc    TEXT,
+    location_id      TEXT,
+    qty              REAL,
+    status           TEXT,
+    created_date     TEXT,
+    disposed_date    TEXT,
+    disposed_by      TEXT,
+    disposition_notes TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_qh_qi     ON quality_holds(qi_id);
+CREATE INDEX IF NOT EXISTS idx_qh_status ON quality_holds(status);
+CREATE INDEX IF NOT EXISTS idx_qh_mat_loc ON quality_holds(material_code, location_id);
+
+CREATE TABLE IF NOT EXISTS rtv_shipments (
+    rtv_id             TEXT PRIMARY KEY,
+    hold_id            TEXT,
+    material_code      TEXT,
+    material_desc      TEXT,
+    qty                REAL,
+    location_id        TEXT,
+    vendor_id          TEXT,
+    vendor_name        TEXT,
+    shipped_date       TEXT,
+    shipped_by         TEXT,
+    eway_bill_number   TEXT,
+    eway_bill_valid_until TEXT,
+    je_id              TEXT,
+    notes              TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rtv_hold ON rtv_shipments(hold_id);
+
+CREATE TABLE IF NOT EXISTS vendor_ratings (
+    rating_id             TEXT PRIMARY KEY,
+    po_number             TEXT,
+    vendor_id             TEXT,
+    rated_by              TEXT,
+    rating                INTEGER,
+    review                TEXT,
+    rating_date           TEXT,
+    vendor_response       TEXT,
+    vendor_response_date  TEXT,
+    UNIQUE(po_number, rated_by)
+);
+CREATE INDEX IF NOT EXISTS idx_vr_vendor ON vendor_ratings(vendor_id);
+CREATE INDEX IF NOT EXISTS idx_vr_po     ON vendor_ratings(po_number);
+
+CREATE TABLE IF NOT EXISTS rmas (
+    rma_id                TEXT PRIMARY KEY,
+    so_id                 TEXT,
+    fulfillment_id        TEXT,
+    material_code         TEXT,
+    material_desc         TEXT,
+    requested_qty         REAL,
+    reason                TEXT,
+    status                TEXT,
+    authorized_date       TEXT,
+    authorized_by         TEXT,
+    window_override_reason TEXT,
+    received_qty          REAL,
+    received_date         TEXT,
+    condition_note        TEXT,
+    receiving_location    TEXT,
+    disposition           TEXT,
+    disposed_qty          REAL,
+    disposed_date          TEXT,
+    disposed_by           TEXT,
+    disposition_notes     TEXT,
+    disposition_je_id     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rma_so     ON rmas(so_id, material_code);
+CREATE INDEX IF NOT EXISTS idx_rma_status ON rmas(status);
+
+CREATE TABLE IF NOT EXISTS credit_memos (
+    credit_memo_id  TEXT PRIMARY KEY,
+    rma_id          TEXT,
+    invoice_id      TEXT,
+    material_code   TEXT,
+    material_desc   TEXT,
+    qty             REAL,
+    unit_price      REAL,
+    taxable_value   REAL,
+    cgst_amount     REAL,
+    sgst_amount     REAL,
+    igst_amount     REAL,
+    credit_total    REAL,
+    issued_date     TEXT,
+    issued_by       TEXT,
+    je_id           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cm_rma     ON credit_memos(rma_id);
+CREATE INDEX IF NOT EXISTS idx_cm_invoice ON credit_memos(invoice_id);
+
+CREATE TABLE IF NOT EXISTS e_invoices (
+    invoice_id     TEXT PRIMARY KEY,
+    irn            TEXT,
+    ack_no         TEXT,
+    ack_date       TEXT,
+    signed_invoice TEXT,
+    signed_qr_code TEXT,
+    status         TEXT,
+    generated_date TEXT,
+    generated_by   TEXT,
+    cancel_reason  TEXT,
+    cancel_date    TEXT,
+    error_message  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_einv_status ON e_invoices(status);
+
+CREATE TABLE IF NOT EXISTS lots (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    lot_number     TEXT,
+    material_code  TEXT,
+    material_desc  TEXT,
+    qty_received   REAL,
+    location_id    TEXT,
+    expiry_date    TEXT,
+    po_number      TEXT,
+    vendor_id      TEXT,
+    vendor_name    TEXT,
+    gr_id          TEXT,
+    received_date  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_lots_material ON lots(material_code, location_id);
+CREATE INDEX IF NOT EXISTS idx_lots_number   ON lots(material_code, lot_number);
 
 CREATE TABLE IF NOT EXISTS production_confirmations (
     confirmation_id   TEXT PRIMARY KEY,
@@ -521,6 +672,7 @@ CREATE TABLE IF NOT EXISTS customer_master (
     onboarding_status TEXT,
     kyc_flag          TEXT,
     default_delivery_location TEXT,
+    pincode           TEXT,
     onboarded_date    TEXT,
     active            TEXT
 );
@@ -547,6 +699,7 @@ CREATE TABLE IF NOT EXISTS org_profile (
     city            TEXT,
     state           TEXT,
     country         TEXT,
+    pincode         TEXT,
     bank_account_no TEXT,
     ifsc            TEXT,
     bank_name       TEXT,
@@ -929,6 +1082,28 @@ def init_schema(db_file=None):
         _add_column_if_missing(conn, "sales_order_items", "backordered_qty", "REAL")
         _add_column_if_missing(conn, "sales_order_items", "reservation_id", "TEXT")
         _add_column_if_missing(conn, "sales_order_items", "backorder_id", "TEXT")
+        # TRC-US-01 (2026-08-09): same DEFAULT-in-ALTER discipline as
+        # source_type above -- an ALTER-added column with no explicit
+        # default would leave every pre-existing item_master row NULL
+        # (not 'None'/'No'), which reads as "unknown tracking type"
+        # instead of the real, correct "not tracked at all".
+        added_tracking = _add_column_if_missing(conn, "item_master", "tracking_type",
+                                                 "TEXT DEFAULT 'None'")
+        if added_tracking:
+            conn.execute("UPDATE item_master SET tracking_type='None' WHERE tracking_type IS NULL")
+        added_shelf_life = _add_column_if_missing(conn, "item_master", "shelf_life_tracked",
+                                                   "TEXT DEFAULT 'No'")
+        if added_shelf_life:
+            conn.execute("UPDATE item_master SET shelf_life_tracked='No' WHERE shelf_life_tracked IS NULL")
+        _add_column_if_missing(conn, "inventory_transactions", "lot_id", "INTEGER")
+        _add_column_if_missing(conn, "stock_transfers", "lot_id", "INTEGER")
+        _add_column_if_missing(conn, "stock_transfers", "fefo_override_reason", "TEXT")
+        # GST e-invoicing (2026-08-10): IRP's Generate IRN schema requires a
+        # real 6-digit Pin for both SellerDtls and BuyerDtls -- neither
+        # org_profile nor customer_master had ever needed a pincode before
+        # this, so a pre-existing database predates the column entirely.
+        _add_column_if_missing(conn, "org_profile", "pincode", "TEXT")
+        _add_column_if_missing(conn, "customer_master", "pincode", "TEXT")
         # None of these backfills are gated on their column having just
         # been added — a row with a NULL value can in principle turn up
         # later too (anything that ever inserts without going through

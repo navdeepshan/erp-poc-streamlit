@@ -37,6 +37,41 @@ _FALLBACKS = {
     "Default Transfer Lead Time Days": "3",
     "Time-Phased Planning Mode": "Sales Order Based",
     "Use Stock Transfer Orders": "No",
+    "Concurrency Guarantee Level": "Strict",
+    "ATP Sourcing Scope": "Single-Plant",
+    "Reservation/Backorder Priority": "First-Confirmed-First-Served",
+    "Reservation Granularity": "Quantity-Only",
+    "Reservation Visibility to Planning": "Reserved Replaces Confirmed-SO Signal",
+    "Vendor Scorecard Weight - On-Time": "30",
+    "Vendor Scorecard Weight - Quality": "30",
+    "Vendor Scorecard Weight - Price Consistency": "20",
+    "Vendor Scorecard Weight - Rating": "20",
+    "Vendor Scorecard Min Transactions": "3",
+}
+
+# Values other than each element's own real, currently-built default
+# are shown in Settings (so the intended design surface is visible —
+# these are real, named policies from ATP-US-01's own Default
+# Configuration Values table, not placeholders) but locked from
+# selection there: each one names a genuine, larger piece of future
+# engineering (Network ATP sourcing consulting the transfer network,
+# Customer Priority Tier requiring a real tier field on Customer
+# Master, lot-level reservation binding, an alternate planning-signal
+# mode) that was deliberately not built alongside ATP-US-01/02/03,
+# not an oversight. get_default() and set_org_default() below don't
+# enforce this themselves -- the lock lives in the Settings UI, so a
+# direct call (e.g. from a script) can still set an unsupported value.
+# validate_atp_policy() exists so any future caller that reads one of
+# these can check explicitly, and fail with a clear, real reason,
+# rather than a decision point silently behaving as if the
+# unsupported mode were honored.
+ATP_POLICY_OPTIONS = {
+    "Concurrency Guarantee Level": ["Strict", "Relaxed"],
+    "ATP Sourcing Scope": ["Single-Plant", "Network"],
+    "Reservation/Backorder Priority": ["First-Confirmed-First-Served", "Customer Priority Tier"],
+    "Reservation Granularity": ["Quantity-Only", "Lot-Level"],
+    "Reservation Visibility to Planning": ["Reserved Replaces Confirmed-SO Signal",
+                                           "Confirmed-SO Signal Only (pre-ATP)"],
 }
 
 
@@ -79,6 +114,31 @@ def set_org_defaults(fields, data_file=None):
     """fields: {Org_Element: Default_Value} — sets several at once."""
     for element, value in fields.items():
         set_org_default(element, value, data_file)
+
+
+def validate_atp_policy(element, data_file=None):
+    """
+    For a real ATP policy element (one of the five keys in
+    ATP_POLICY_OPTIONS): returns the current value if it's the one
+    real, currently-built default; raises a clear NotImplementedError
+    otherwise. The Settings UI already locks these to their own real
+    default, so this should never actually trigger through normal use
+    — it exists for a direct set_org_default() call (a script, a future
+    caller) that bypasses that lock, so a decision point in atp.py/
+    reservation.py/backorder.py/bom.py fails with a real, specific
+    reason instead of silently behaving as if an unbuilt mode were
+    honored.
+    """
+    value = get_default(element, data_file)
+    built_default = _FALLBACKS.get(element)
+    if element in ATP_POLICY_OPTIONS and value != built_default:
+        raise NotImplementedError(
+            f"'{element}' is set to '{value}', but only '{built_default}' is "
+            f"actually built in this release — the alternative is a real, "
+            f"named future extension (see ATP_POLICY_OPTIONS), not yet "
+            f"implemented at any decision point. Locked in Settings for "
+            f"exactly this reason; this value must have been set directly.")
+    return value
 
 
 if __name__ == "__main__":

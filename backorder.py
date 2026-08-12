@@ -102,6 +102,9 @@ def reevaluate_backorders(mat_code, location_id, data_file=None):
     Returns the list of backorders touched, each with its own real
     before/after state.
     """
+    import org_defaults as od
+    od.validate_atp_policy("Reservation/Backorder Priority", data_file=data_file)
+
     conn = db.get_connection()  # data_file intentionally ignored -- see module docstring
     try:
         rows = conn.execute(
@@ -157,6 +160,55 @@ def get_backorder(backorder_id, data_file=None):
     finally:
         conn.close()
     return dict(row) if row else None
+
+
+def resolve_backorder_via_shipment(backorder_id, shipped_qty, data_file=None):
+    """
+    A real, second way a Backorder resolves — genuinely distinct from
+    reevaluate_backorders()'s own new-supply-arrival path, and a real
+    gap found and fixed here directly: fulfillment.py's own
+    record_shipment() ships real stock and posts a real Goods Issue,
+    but until now never touched this backorder's own record at all,
+    so a fully, physically delivered order's own original shortfall
+    just sat here forever, Open, long after the customer actually had
+    the goods.
+
+    Deliberately does NOT create a Reservation the way reevaluate_
+    backorders() does — there's nothing left to reserve; the stock
+    already left the building via this same shipment's own Goods
+    Issue. This function only ever reduces this backorder's own real
+    open_qty by the real quantity that just shipped (capped at what
+    was genuinely still open — a shipment can't resolve more backorder
+    than actually exists), moving it to Fulfilled once nothing remains
+    open, or leaving it Partially Fulfilled with a real, smaller
+    open_qty otherwise. No-op, returning None, if the backorder is
+    already Fulfilled or Cancelled — a caller doesn't need to check
+    status first.
+    """
+    if shipped_qty <= 0:
+        return None
+    bo = get_backorder(backorder_id, data_file)
+    if bo is None:
+        raise ValueError(f"{backorder_id} not found.")
+    if bo["status"] not in ("Open", "Partially Fulfilled"):
+        return None
+
+    resolved_qty = min(shipped_qty, bo["open_qty"])
+    new_open_qty = round(bo["open_qty"] - resolved_qty, 3)
+    new_status = "Fulfilled" if new_open_qty <= 0.005 else "Partially Fulfilled"
+
+    conn = db.get_connection()  # data_file intentionally ignored -- see module docstring
+    try:
+        conn.execute(
+            "UPDATE backorders SET open_qty=?, status=?, resolved_date=? WHERE backorder_id=?",
+            (max(0.0, new_open_qty), new_status,
+             str(date.today()) if new_status == "Fulfilled" else None, backorder_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"backorder_id": backorder_id, "resolved_qty": resolved_qty,
+           "new_open_qty": max(0.0, new_open_qty), "new_status": new_status}
 
 
 def cancel_backorder(backorder_id, reason="", data_file=None):

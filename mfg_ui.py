@@ -27,17 +27,22 @@ from datetime import date
 import db
 import po_export
 import shipping
+import eway_bill
 import sto
 import reservation as res
 import pr_consolidation
 import goods_receipt as gr
 import quality_inspection as qi
+import rtv
+import rma
+import traceability as trc
 import bom
 import org_defaults as od
 import inventory as inv
 import production as prod
 import accounting as acct
 import vendor_invoices as vi
+import nav_catalog as nav
 
 def load_delivery_locs():
     """Delivery_Locations now lives in SQLite — delegates to
@@ -54,20 +59,20 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 st.set_page_config(page_title="Manufacturing", page_icon="\U0001f527", layout="wide")
 
-from ui_theme import apply_theme
-apply_theme()
-
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### \U0001f527 ERP Suite")
+    st.markdown("### \U0001f527 AutonoVerse Garage")
     st.caption("Manufacturing")
     st.divider()
-    page = st.radio("", ["\U0001f4e5  Goods Receipt",
-                         "\U0001f50e  Quality Inspection",
-                         "\U0001f9e9  BOM & Explosion",
-                         "\U0001f3ed  Production",
-                         "\U0001f4e6  Inventory"],
+    _page_options = ["📥  Goods Receipt",
+                     "🔎  Quality Inspection",
+                     "🧩  BOM & Explosion",
+                     "🏭  Production",
+                     "📦  Inventory"]
+    # `?page=` deep-link support (2026-08-11) -- see nav_catalog.py
+    page = st.radio("", _page_options,
+                    index=nav.resolve_page_index(_page_options, st.query_params.get("page")),
                     label_visibility="collapsed")
     st.divider()
 
@@ -77,10 +82,8 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 def page_goods_receipt():
     st.markdown("## \U0001f4e5 Goods Receipt")
-    st.caption("Captures received quantities separately from ordered quantities, "
-               "supporting partial receipt across one or more Goods Receipts against "
-               "the same PO. This is the event Three-Way Match and Quality Inspection "
-               "both rely on.")
+    st.caption("Record what actually arrived against a purchase order, including partial "
+               "deliveries across multiple receipts.")
     st.divider()
 
     s = gr.stats()
@@ -113,6 +116,7 @@ def page_goods_receipt():
             st.markdown("##### Enter quantity received per line")
             line_qtys = {}
             pr_overrides = {}
+            line_lots = {}
             for i, ln in enumerate(lines):
                 po_item = ln["po_item"]
                 c1, c2 = st.columns([3, 1.3])
@@ -125,6 +129,30 @@ def page_goods_receipt():
                 qty_received = c2.number_input("Qty received", min_value=0.0,
                     value=float(default_qty), key=f"gr_qty_{sel_po}_{i}", label_visibility="collapsed")
                 line_qtys[po_item] = qty_received
+
+                # TRC-US-01 (2026-08-09): shown only for a Batch/Serial-
+                # tracked material, never for a None-tracked one \u2014 the
+                # document's own rule, and this panel is the only place
+                # that data can ever be captured, so a tracked material
+                # received with this left blank is a real, correct hard
+                # block at Create Goods Receipt time, not a silent gap.
+                tracking = trc.get_tracking_info(ln["mat_code"])
+                if qty_received > 0 and tracking["tracking_type"] == "Batch":
+                    lc1, lc2 = st.columns([2, 1.3])
+                    lot_number = lc1.text_input(f"Lot/Batch Number \u2014 {ln['mat_desc']}",
+                        key=f"gr_lot_{sel_po}_{i}")
+                    expiry = ""
+                    if tracking["shelf_life_tracked"]:
+                        expiry_date = lc2.date_input(f"Expiry Date \u2014 {ln['mat_desc']}",
+                            value=None, key=f"gr_expiry_{sel_po}_{i}")
+                        expiry = str(expiry_date) if expiry_date else ""
+                    line_lots[po_item] = {"lot_number": lot_number, "expiry_date": expiry}
+                elif qty_received > 0 and tracking["tracking_type"] == "Serial":
+                    serials_raw = st.text_area(
+                        f"Serial Numbers \u2014 {ln['mat_desc']} (one per line, exactly {qty_received:g} required)",
+                        key=f"gr_serials_{sel_po}_{i}", height=80)
+                    serials = [s.strip() for s in serials_raw.splitlines() if s.strip()]
+                    line_lots[po_item] = {"serials": serials}
 
                 source_prs = source_prs_by_line.get(po_item, [])
                 if len(source_prs) > 1 and qty_received > 0:
@@ -170,7 +198,7 @@ def page_goods_receipt():
                     st.caption("Defaults to the PO's own delivery location — change this only if "
                               "the goods actually arrived somewhere else.")
                 else:
-                    st.warning("No delivery locations set up — add one on the S2P app first.")
+                    st.warning("No delivery locations set up — add one under Source to Contract first.")
                     deliv_loc = ""
             with c2:
                 received_by = st.text_input("Received By", key="gr_recvby")
@@ -180,7 +208,7 @@ def page_goods_receipt():
             if create_clicked:
                 try:
                     gr_id = gr.create_gr(sel_po, line_qtys, deliv_loc, received_by, notes,
-                                         pr_allocations=pr_overrides or None)
+                                         pr_allocations=pr_overrides or None, line_lots=line_lots or None)
                     st.cache_data.clear()
                     st.success(f"\u2705 {gr_id} created for {sel_po}. Head to **Manage GRs** "
                               "to generate the receipt note.")
@@ -243,10 +271,9 @@ def page_goods_receipt():
 
                 st.divider()
                 st.markdown("##### \U0001f4b0 Vendor Invoice")
-                st.caption("Stage 2 of the proper 3-way match: GR posted Dr Inventory / "
-                          "Cr GR/IR Clearing (ex-GST) — this clears that and, for the "
-                          "first time, credits Accounts Payable. GST is determined here, "
-                          "not at GR time, matching real invoice-verification practice.")
+                st.caption("Once matched, this clears the goods receipt and credits Accounts Payable. "
+                           "GST is determined at this step, matching real invoice-verification "
+                           "practice.")
                 vinv = vi.invoice_for_gr(sel)
                 if vinv is None:
                     if g["status"] != "Posted":
@@ -298,23 +325,26 @@ def page_goods_receipt():
 # ══════════════════════════════════════════════════════════════════════════════
 def page_quality_inspection():
     st.markdown("## \U0001f50e Quality Inspection")
-    st.caption("Record-only — inspection results here never block Goods Receipt or "
-               "anything else. They provide a warning signal for a payment-proposal "
-               "process to check before release, not an enforcement gate. 'Not yet "
-               "inspected' and 'Failed' are tracked as distinct statuses, since they "
-               "carry very different weight for downstream review.")
+    st.caption("Record inspection results against received goods. A Fail immediately "
+               "places that quantity on Quality Hold, removing it from available stock "
+               "until it's dispositioned.")
     st.divider()
 
     s = qi.stats()
-    m1, m2, m3, m4, m5 = st.columns(5)
+    held_count = len(qi.get_quality_holds(status="Held"))
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Passed", s["by_status"].get(qi.STATUS_PASSED, 0))
     m2.metric("Partial Pass", s["by_status"].get(qi.STATUS_PARTIAL, 0))
     m3.metric("Failed", s["by_status"].get(qi.STATUS_FAILED, 0))
     m4.metric("In Progress", s["by_status"].get(qi.STATUS_IN_PROGRESS, 0))
     m5.metric("GRs Pending", s["grs_pending"])
+    m6.metric("\U0001f512 Held", held_count)
     st.divider()
 
-    tab1, tab2 = st.tabs(["\u2795 Record Inspection", "\U0001f4cb Manage Inspections"])
+    rma_pending = len(rma.get_pending_receipt()) + len(rma.get_pending_disposition())
+    tab1, tab2, tab3, tab4 = st.tabs(["\u2795 Record Inspection", "\U0001f4cb Manage Inspections",
+                                f"\U0001f512 Quality Holds & RTV ({held_count})",
+                                f"\u21a9\ufe0f RMA Receipt & Disposition ({rma_pending})"])
 
     # ── TAB 1 — record results per GR line ────────────────────────────────────────
     with tab1:
@@ -408,16 +438,157 @@ def page_quality_inspection():
             elif po_status["clean"]:
                 st.success("\u2705 Every line on this PO passed inspection cleanly.")
 
+    # ── TAB 3 — Quality Holds & RTV ────────────────────────────────────────────────
+    with tab3:
+        st.caption("A Fail immediately places that quantity on Quality Hold, excluding it from "
+                   "available stock until it's dispositioned. Disposition is final per line — "
+                   "a correction needs an explicit reversal.")
+        actor = st.text_input("Your name (recorded against any action below)", key="qh_actor")
+
+        _qh_loc_names = {d["id"]: d["name"] for d in load_delivery_locs()}
+        def _lname(loc_id): return _qh_loc_names.get(loc_id, loc_id)
+
+        held = qi.get_quality_holds(status="Held")
+        if held:
+            st.markdown("##### 🔒 Held — awaiting disposition")
+            for h in held:
+                c1, c2, c3 = st.columns([3, 1, 1.3])
+                c1.write(f"**{h['mat_desc']}** ({h['mat_code']}) · {h['qty']:g} units · "
+                        f"{_lname(h['location_id'])} · from {h['gr_id']}")
+                if c2.button("♻️ Scrap", key=f"qh_scrap_{h['hold_id']}"):
+                    try:
+                        result = qi.dispose_quality_hold(h["hold_id"], "Scrap", disposed_by=actor)
+                        st.cache_data.clear()
+                        msg = f"✅ {h['hold_id']} scrapped"
+                        if result["je_id"]:
+                            msg += f" — posted {result['je_id']}"
+                        st.success(msg + ".")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ {e}")
+                if c3.button("↩️ Return to Vendor", key=f"qh_rtv_{h['hold_id']}"):
+                    try:
+                        qi.dispose_quality_hold(h["hold_id"], "Return to Vendor", disposed_by=actor)
+                        st.cache_data.clear()
+                        st.success(f"✅ {h['hold_id']} marked for return — ship it in the "
+                                  f"section below.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ {e}")
+        else:
+            st.caption("Nothing currently Held.")
+
+        st.divider()
+        pending_rtv = rtv.get_pending_rtv_holds()
+        if pending_rtv:
+            st.markdown("##### 🚚 Pending RTV Shipment")
+            for h in pending_rtv:
+                c1, c2 = st.columns([4, 1])
+                extra = f" · {h['disposition_notes']}" if h["disposition_notes"] else ""
+                c1.write(f"**{h['mat_desc']}** ({h['mat_code']}) · {h['qty']:g} units · "
+                        f"from {h['gr_id']}{extra}")
+                if c2.button("🚚 Ship to Vendor", key=f"rtv_ship_{h['hold_id']}"):
+                    try:
+                        result = rtv.ship_return_to_vendor(h["hold_id"], shipped_by=actor)
+                        st.cache_data.clear()
+                        msg = f"✅ {result['rtv_id']} shipped"
+                        if result["je_id"]:
+                            msg += f", posted {result['je_id']}"
+                        if result["eway_bill_number"]:
+                            msg += (f", e-way bill {result['eway_bill_number']} valid to "
+                                   f"{result['eway_bill_valid_until']}")
+                        st.success(msg + ".")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ {e}")
+        else:
+            st.caption("Nothing pending shipment back to a vendor.")
+
+        st.divider()
+        shipments = rtv.get_rtv_shipments()
+        if shipments:
+            st.markdown("##### 📋 Returned to Vendor")
+            sdf = pd.DataFrame(shipments)[["rtv_id", "material_desc", "qty", "vendor_name",
+                                           "shipped_date", "eway_bill_number", "je_id"]]
+            sdf.columns = ["RTV", "Material", "Qty", "Vendor", "Shipped", "E-Way Bill", "JE"]
+            st.dataframe(sdf, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No returns shipped yet.")
+
+    # ── TAB 4 — RMA Receipt & Disposition ─────────────────────────────────────────
+    with tab4:
+        st.caption("Physical receipt and disposition of a customer return (Sellable or Scrap) "
+                   "happen here. Authorization and the credit memo are handled on Order to "
+                   "Cash's Returns (RMA) page.")
+        rma_actor = st.text_input("Your name (recorded against any action below)", key="rma_actor")
+
+        st.markdown("##### 📥 Awaiting Receipt")
+        pending_receipt = rma.get_pending_receipt()
+        if pending_receipt:
+            for r in pending_receipt:
+                st.write(f"**{r['rma_id']}** — {r['mat_desc']} ({r['mat_code']}) · "
+                        f"requested {r['requested_qty']:g} · {r['so_id']} · reason: {r['reason']}")
+                c1, c2, c3 = st.columns([1, 2, 1])
+                with c1:
+                    recv_qty = st.number_input("Received qty", min_value=0.0,
+                        max_value=float(r["requested_qty"]), value=float(r["requested_qty"]),
+                        key=f"rma_recv_qty_{r['rma_id']}")
+                with c2:
+                    cond = st.text_input("Condition note", key=f"rma_recv_cond_{r['rma_id']}")
+                with c3:
+                    if st.button("📥 Receive", key=f"rma_recv_btn_{r['rma_id']}"):
+                        try:
+                            result = rma.receive_rma(r["rma_id"], recv_qty, cond)
+                            st.cache_data.clear()
+                            st.success(f"✅ {r['rma_id']} — {result['status']}.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ {e}")
+                st.divider()
+        else:
+            st.caption("Nothing currently awaiting receipt.")
+
+        st.markdown("##### ⚖️ Awaiting Disposition")
+        pending_disp = rma.get_pending_disposition()
+        if pending_disp:
+            for r in pending_disp:
+                c1, c2, c3 = st.columns([3, 1, 1])
+                c1.write(f"**{r['mat_desc']}** ({r['mat_code']}) · {r['received_qty']:g} units · "
+                        f"{r['rma_id']} · condition: {r['condition_note']}")
+                if c2.button("✅ Sellable", key=f"rma_sell_{r['rma_id']}"):
+                    try:
+                        result = rma.dispose_rma(r["rma_id"], "Sellable", disposed_by=rma_actor)
+                        st.cache_data.clear()
+                        msg = f"✅ {r['rma_id']} dispositioned Sellable"
+                        if result["je_id"]:
+                            msg += f" — posted {result['je_id']}"
+                        st.success(msg + ".")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ {e}")
+                if c3.button("♻️ Scrap", key=f"rma_scrap_{r['rma_id']}"):
+                    try:
+                        result = rma.dispose_rma(r["rma_id"], "Scrap", disposed_by=rma_actor)
+                        st.cache_data.clear()
+                        msg = f"✅ {r['rma_id']} scrapped"
+                        if result["je_id"]:
+                            msg += f" — posted {result['je_id']}"
+                        st.success(msg + ".")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ {e}")
+        else:
+            st.caption("Nothing currently awaiting disposition.")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE — BOM & Explosion
 # ══════════════════════════════════════════════════════════════════════════════
 def page_bom():
     st.markdown("## \U0001f9e9 BOM & Explosion")
-    st.caption("Manual trigger, not continuous MRP. Nets against BOTH on-hand inventory "
-               "at the delivery location AND open PO exposure — genuine gross-to-net now "
-               "that a real inventory ledger exists. Generated PR lines flow through the "
-               "exact same PO-vs-RFP split as any other PR.")
+    st.caption("Explode a finished good's bill of materials to see what's needed, netted "
+               "against current stock and open purchase orders, and generate a requisition "
+               "for any shortfall.")
     st.divider()
 
     s = bom.stats()
@@ -488,7 +659,7 @@ def page_bom():
                 deliv_loc = sel_loc_id
                 deliv_geo = next(d["geo"] for d in deliv_locs if d["id"] == sel_loc_id)
             else:
-                st.warning("No delivery locations set up — add one on the S2P app first.")
+                st.warning("No delivery locations set up — add one under Source to Contract first.")
                 deliv_loc, deliv_geo = "", ""
 
             detailed = bom.explode_bom_detailed(sel_fg, qty)
@@ -524,7 +695,7 @@ def page_bom():
                     st.cache_data.clear()
                     st.success(f"\u2705 {result['pr_number']} created — {result['lines']} line(s), "
                               f"{result['with_vendor']} with a preferred vendor already. "
-                              "Head to Consolidate on the S2P app to route them.")
+                              "Head to Consolidate under Source to Contract to route them.")
                 except Exception:
                     st.error("\u274c Error proposing PR:")
                     st.code(traceback.format_exc())
@@ -759,9 +930,8 @@ def _material_flow_svg(vendor_label, vendor_sub, from_name, stays_qty, destinati
 # ══════════════════════════════════════════════════════════════════════════════
 def page_inventory():
     st.markdown("## \U0001f4e6 Inventory")
-    st.caption("Transaction-based — every balance below is computed live from "
-               "transaction history, not stored separately. Goods Receipt, Production "
-               "Confirmation, and O2C Fulfillment shipments all post here.")
+    st.caption("Live stock balances across every location, updated automatically as goods "
+               "are received, produced, transferred, and shipped.")
     st.divider()
 
     s = inv.stats()
@@ -777,9 +947,9 @@ def page_inventory():
               delta_color="inverse")
     st.divider()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["\U0001f4ca Stock by Location", "\U0001f50d By Material",
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["\U0001f4ca Stock by Location", "\U0001f50d By Material",
                                 "\U0001f4dc Transaction History", "\U0001f3af Position & Transfers",
-                                "\U0001f4c5 Time-Phased Planning"])
+                                "\U0001f4c5 Time-Phased Planning", "\U0001f52c Traceability"])
 
     # ── TAB 1 — full stock position ────────────────────────────────────────────
     with tab1:
@@ -822,11 +992,9 @@ def page_inventory():
                     file_name=gd["filename"], mime=XLSX_MIME, key="inv_dl")
 
             st.divider()
-            with st.expander("\U0001f512 Reservation Ledger (ATP-US-02)"):
-                st.caption("Real, currently-Open reservations \u2014 quantity spoken for "
-                          "against a Sales Order, decremented from Available-to-Promise "
-                          "at the material/location shown, until picked (Consumed) or "
-                          "released.")
+            with st.expander("\U0001f512 Reservation Ledger"):
+                st.caption("Quantity set aside against a Sales Order at this material and location, "
+                           "until it's picked or released.")
                 if not open_reservations:
                     st.caption("No open reservations right now.")
                 else:
@@ -907,10 +1075,21 @@ def page_inventory():
         if flash:
             flash_fn = {"success": st.success, "warning": st.warning}.get(flash[0], st.error)
             flash_fn(flash[1])
+            # Real gap found and fixed here directly: this banner renders at the
+            # top of a tab that's often scrolled several screens down by the time
+            # an action completes (Hub Allocation and In Transit both sit well
+            # below the fold) -- a real result, genuinely easy to miss entirely.
+            # A toast is a real Streamlit overlay, independent of scroll position,
+            # so it's seen regardless of where the page happens to be scrolled to.
+            # Truncated to a single line -- a toast is for "something happened,
+            # go look," not the full detail, which the banner above still carries
+            # in full for whoever scrolls up to review it.
+            toast_text = flash[1].split("\n")[0]
+            if len(toast_text) > 120:
+                toast_text = toast_text[:117] + "..."
+            st.toast(toast_text, icon="\u2705" if flash[0] == "success" else "\u26a0\ufe0f")
 
-        st.caption("Demand here means confirmed, BOM-matched Sales Orders only — the "
-                  "one real demand signal in this system right now. No forecasting, "
-                  "no reorder points.")
+        st.caption("Demand is driven by confirmed, BOM-matched Sales Orders.")
         position = bom.get_inventory_position()
         if not position:
             st.info("No confirmed Sales Orders for BOM-matched items right now — "
@@ -947,51 +1126,80 @@ def page_inventory():
                 use_sto = od.get_default("Use Stock Transfer Orders") == "Yes"
                 if use_sto:
                     st.markdown("###### \U0001f3ed Hub Allocation (Stock Transfer Order)")
-                    st.caption("Creates a Stock Transfer Order covering every Plant shown "
-                              "above for this material and Hub, generates an e-way bill "
-                              "where required (inter-state movement above the statutory "
-                              "value threshold), and posts the freight accrual. Allocation "
-                              "uses the same largest-shortage-first split shown above; a "
-                              "configurable approval step will be available in a future "
-                              "release.")
+                    st.caption("Creates a Stock Transfer Order covering every Plant shown above for this "
+                               "material and Hub, generates an e-way bill where required, and posts the "
+                               "freight accrual. Allocation serves the largest shortage first.")
                     sto_groups = {}
                     for t in transfers:
                         key = (t["mat_code"], t["from_location"])
                         sto_groups.setdefault(key, []).append(t)
+                    sto_group_keys = list(sto_groups.keys())
+
+                    def _select_all_sto(sto_group_keys=sto_group_keys):
+                        val = st.session_state["select_all_sto"]
+                        for mat_code, from_loc in sto_group_keys:
+                            st.session_state[f"chk_sto_{mat_code}_{from_loc}"] = val
+
+                    sto_sa1, sto_sa2 = st.columns([1, 5])
+                    sto_sa1.checkbox("Select All", key="select_all_sto",
+                                     on_change=_select_all_sto)
+
                     for (mat_code, from_loc), group in sto_groups.items():
                         mat_desc = group[0]["mat_desc"]
                         destinations = ", ".join(_lname(g["to_location"]) for g in group)
-                        gc1, gc2 = st.columns([4, 1.3])
+                        gc0, gc1 = st.columns([0.4, 5.3])
+                        gc0.checkbox("Select", key=f"chk_sto_{mat_code}_{from_loc}",
+                                    label_visibility="collapsed")
                         gc1.write(f"**{mat_desc}** from {_lname(from_loc)} \u2192 {destinations}")
-                        if gc2.button("\U0001f3ed Create STO", key=f"create_sto_{mat_code}_{from_loc}"):
-                            try:
-                                result = sto.simple_allocate_and_create_sto(
-                                    mat_code, from_loc, created_by="ERP UI")
-                                st.cache_data.clear()
-                                legs = ", ".join(f"{_lname(l['to_location'])} "
-                                                f"({l['allocated_qty']:g})" for l in result["lines"])
-                                st.session_state["tp_flash_message"] = ("success",
-                                    f"\u2705 {result['sto_id']} created — {legs}. Real freight "
-                                    f"accrual posted; e-way bill generated for any inter-state "
-                                    f"leg above the real value threshold.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"\u274c {e}")
+
+                    st.divider()
+                    if st.button("\U0001f3ed Create Selected STOs", type="primary",
+                                key="create_sto_selected_btn"):
+                        selected_keys = [(mat_code, from_loc) for mat_code, from_loc in sto_group_keys
+                                         if st.session_state.get(f"chk_sto_{mat_code}_{from_loc}")]
+                        if not selected_keys:
+                            st.warning("No groups selected — check at least one row first.")
+                        else:
+                            created, failed = [], []
+                            all_eway_lines = []
+                            for mat_code, from_loc in selected_keys:
+                                try:
+                                    result = sto.simple_allocate_and_create_sto(
+                                        mat_code, from_loc, created_by="ERP UI")
+                                    legs = ", ".join(f"{_lname(l['to_location'])} "
+                                                     f"({l['allocated_qty']:g})"
+                                                     for l in result["lines"])
+                                    created.append(f"{result['sto_id']} \u2014 {legs}")
+                                    all_eway_lines.extend(
+                                        l for l in result["lines"] if l.get("eway_bill_number"))
+                                except Exception as e:
+                                    failed.append(f"{mat_code} from {_lname(from_loc)}: {e}")
+                                if f"chk_sto_{mat_code}_{from_loc}" in st.session_state:
+                                    del st.session_state[f"chk_sto_{mat_code}_{from_loc}"]
+                            st.cache_data.clear()
+                            msg_parts = []
+                            if created:
+                                eway_note = ("Real e-way bill(s): " +
+                                    ", ".join(f"{l['eway_bill_number']} ({_lname(l['to_location'])})"
+                                             for l in all_eway_lines) + "."
+                                    if all_eway_lines else
+                                    "No leg here was genuinely inter-state and above the real "
+                                    "value threshold, so no e-way bill applies.")
+                                msg_parts.append(f"\u2705 Created: " + "; ".join(created) +
+                                                 f". Real freight accrual posted for each. "
+                                                 f"{eway_note}")
+                            if failed:
+                                msg_parts.append(f"\u274c Failed: " + "; ".join(failed))
+                            st.session_state["tp_flash_message"] = (
+                                "success" if not failed else "warning", "\n\n".join(msg_parts))
+                            st.rerun()
 
                 else:
                     st.markdown("###### Ship")
-                    st.caption("Ships real stock — the source location's balance drops "
-                              "immediately, but the destination doesn't receive it until "
-                              "someone confirms receipt below. Genuinely in transit in "
-                              "between, not silently teleported. The quantity is pre-filled "
-                              "with the suggestion (largest shortage served first when several "
-                              "destinations compete for the same source) but freely editable — "
-                              "shipping itself always re-checks real, current availability, "
-                              "so an edited quantity can't over-allocate the same stock twice. "
-                              "Select the lines to ship together and pick one courier for all "
-                              "of them — a later version can let an agent or an optimizer "
-                              "choose the best courier per line instead of one shared choice "
-                              "here; this is the manual baseline that unlocks.")
+                    st.caption("Ships real stock — the source location's balance drops immediately, but "
+                               "the destination doesn't receive it until someone confirms receipt below. "
+                               "The quantity is pre-filled with a suggested split but freely editable. "
+                               "Select the lines to ship together and pick one courier for all of them.")
 
                     row_keys = [f"{t['mat_code']}_{t['from_location']}_{t['to_location']}"
                                for t in transfers]
@@ -1028,6 +1236,21 @@ def page_inventory():
                         c2.number_input(f"Qty ({uom})", min_value=0.0,
                             max_value=float(t["available_at_source"]), value=float(t["suggested_qty"]),
                             step=1.0, key=f"exec_qty_{row_key}", label_visibility="collapsed")
+                        # TRC-US-01 (2026-08-09): FEFO is only ever a
+                        # suggestion for a Batch-tracked material with a
+                        # Shelf-Life -- a Serial-tracked one has no expiry-
+                        # driven ordering, only individual unit selection,
+                        # which this dense, multi-row bulk-select view
+                        # doesn't attempt (a real, documented scope cut,
+                        # not a silent gap -- see CONTEXT_HANDOFF_v2.md ss7l).
+                        if trc.get_tracking_info(t["mat_code"])["tracking_type"] == "Batch":
+                            fefo = trc.suggest_fefo_lot(t["mat_code"], t["from_location"],
+                                st.session_state.get(f"exec_qty_{row_key}", t["suggested_qty"]))
+                            if fefo["plan"]:
+                                plan_txt = ", ".join(f"{p['qty']:g} from {p['lot_number']} "
+                                                     f"(exp {p['expiry_date']})" for p in fefo["plan"])
+                                c1.caption(f"\U0001f9ea FEFO: {plan_txt}" +
+                                          (" -- shortfall beyond tracked lots" if not fefo["fully_covered"] else ""))
 
                     st.divider()
                     st.caption("Courier for selected lines — 'Let system choose' leaves each "
@@ -1053,9 +1276,36 @@ def page_inventory():
                                 uom = item_info["uom"] if item_info else "pcs"
                                 qty = st.session_state.get(f"exec_qty_{row_key}", t["suggested_qty"])
                                 try:
-                                    result = inv.ship_transfer(t["mat_code"], t["mat_desc"],
-                                        t["from_location"], t["to_location"], qty, carrier=batch_courier)
-                                    shipped.append(f"{result['transfer_id']} ({qty:g} {uom})")
+                                    # TRC-US-01: a Batch-tracked material ships
+                                    # against its own FEFO-suggested lot(s) —
+                                    # one real ship_transfer() call per lot in
+                                    # the plan, since ship_transfer() itself
+                                    # only ever attributes one lot per real
+                                    # shipment record. A shortfall beyond what
+                                    # any tracked lot covers ships the
+                                    # remainder unattributed (lot_id=None) —
+                                    # the same honest, non-blocking behavior
+                                    # this whole ledger already uses elsewhere
+                                    # rather than inventing stock that isn't
+                                    # really in a tracked lot.
+                                    if trc.get_tracking_info(t["mat_code"])["tracking_type"] == "Batch":
+                                        fefo = trc.suggest_fefo_lot(t["mat_code"], t["from_location"], qty)
+                                        leg_ids = []
+                                        for p in fefo["plan"]:
+                                            r = inv.ship_transfer(t["mat_code"], t["mat_desc"],
+                                                t["from_location"], t["to_location"], p["qty"],
+                                                carrier=batch_courier, lot_id=p["lot_id"])
+                                            leg_ids.append(r["transfer_id"])
+                                        if fefo["shortfall"] > 0:
+                                            r = inv.ship_transfer(t["mat_code"], t["mat_desc"],
+                                                t["from_location"], t["to_location"],
+                                                fefo["shortfall"], carrier=batch_courier)
+                                            leg_ids.append(r["transfer_id"])
+                                        shipped.append(f"{', '.join(leg_ids)} ({qty:g} {uom}, FEFO)")
+                                    else:
+                                        result = inv.ship_transfer(t["mat_code"], t["mat_desc"],
+                                            t["from_location"], t["to_location"], qty, carrier=batch_courier)
+                                        shipped.append(f"{result['transfer_id']} ({qty:g} {uom})")
                                 except Exception as e:
                                     failed.append(f"{t['mat_desc']}: {e}")
                                 # Real bug found and fixed here: assigning False to an
@@ -1157,9 +1407,7 @@ def page_inventory():
                     if not status:
                         st.write("No tracking information on file yet.")
                         return
-                    st.caption("No real courier tracking API is called here — this is a "
-                              "deterministic simulation from the real ship date, not a "
-                              "live status.")
+                    st.caption("Tracking updates are simulated from the real ship date.")
                     st.markdown(f"**AWB {status['awb_number']}** \u2014 "
                                f"*{status['current_status']}*")
                     st.divider()
@@ -1211,6 +1459,22 @@ def page_inventory():
                             if st.button(f"\U0001f517 AWB {t['tracking_ref']}",
                                         key=f"awb_link_{t['transfer_id']}"):
                                 _show_tracking(t["transfer_id"])
+                    if t["eway_bill_number"]:
+                        # Real gap found and fixed here directly: the number was
+                        # visible on screen, but there was never an actual document
+                        # to hand a real carrier driver. Cached per-transfer so
+                        # clicking Download doesn't regenerate (and reformat) the
+                        # PDF on every rerun this same page already does for
+                        # unrelated reasons.
+                        cache_key = f"ewb_pdf_{t['transfer_id']}"
+                        if cache_key not in st.session_state:
+                            ewb_fname, ewb_bytes = eway_bill.generate_eway_bill_document(
+                                t["transfer_id"])
+                            st.session_state[cache_key] = (ewb_fname, ewb_bytes)
+                        ewb_fname, ewb_bytes = st.session_state[cache_key]
+                        st.download_button(f"\U0001f4c4 Download E-Way Bill {t['eway_bill_number']}",
+                            data=ewb_bytes, file_name=ewb_fname, mime="application/pdf",
+                            key=f"ewb_dl_{t['transfer_id']}")
                     if c4.button("\u274c Cancel", key=f"cancel_{t['transfer_id']}"):
                         try:
                             inv.cancel_transfer(t["transfer_id"], cancelled_by="ERP UI")
@@ -1435,7 +1699,8 @@ def page_inventory():
                 for d in analysis["duplicates"]:
                     lines_desc = ", ".join(f"{c['pr_number']} ({c['qty']:g}, due {c['required_date']})"
                                            for c in d["competing_lines"])
-                    st.write(f"**{d['mat_code']}** @ {_lname(d['location'])}: {lines_desc}")
+                    st.write(f"**{d.get('mat_desc', d['mat_code'])}** ({d['mat_code']}) "
+                            f"@ {_lname(d['location'])}: {lines_desc}")
                 st.divider()
 
             if not insufficient and not analysis["duplicates"]:
@@ -1461,9 +1726,20 @@ def page_inventory():
                         st.error("\u274c Material, Location required, and Max must exceed Min.")
             existing = bom.get_planning_params()
             if existing:
-                edf = pd.DataFrame(existing)
-                edf.columns = ["Material", "Location", "Min", "Max", "Cadence (days)"]
-                st.dataframe(edf, use_container_width=True, hide_index=True)
+                st.caption("Configured (material, location) reorder parameters — real, "
+                          "editable rows, not a static reference list.")
+                for row in existing:
+                    item_info = po_export.get_item_by_code(row["material_code"], active_only=False)
+                    mat_desc = item_info["desc"] if item_info else row["material_code"]
+                    ec1, ec2 = st.columns([5, 1])
+                    ec1.write(f"**{mat_desc}** ({row['material_code']}) @ "
+                             f"{_lname(row['location'])} \u00b7 Min {row['min_qty']:g} \u00b7 "
+                             f"Max {row['max_qty']:g} \u00b7 every {row['reorder_cadence_days']}d")
+                    if ec2.button("\U0001f5d1\ufe0f Delete", key=f"del_pp_{row['material_code']}_{row['location']}"):
+                        bom.delete_planning_params(row["material_code"], row["location"])
+                        st.cache_data.clear()
+                        st.success(f"\u2705 Removed {mat_desc} @ {_lname(row['location'])}.")
+                        st.rerun()
             st.divider()
 
         recs = bom.get_procurement_recommendations()
@@ -1472,36 +1748,60 @@ def page_inventory():
         covered = [r for r in recs if r["outcome"] == "Already Covered by Existing PR/PO"]
 
         m1, m2, m3 = st.columns(3)
-        m1.metric("\U0001f6a8 At Risk", len(at_risk))
-        m2.metric("\U0001f4cb Action Needed", len(action_needed))
-        m3.metric("\u2705 Already Covered", len(covered))
+        m1.metric("🚨 At Risk", len(at_risk))
+        m2.metric("📋 Action Needed", len(action_needed))
+        m3.metric("✅ Already Covered", len(covered))
+
+        show_source = st.checkbox(
+            "🔎 Show Source", value=False, key="tp_show_source",
+            help="Adds a column naming exactly which Sales Order(s) - or, in Reorder "
+                 "Qty Based mode, which assumed reorder cycle - are driving each row's "
+                 "demand, and whether that demand came from exploding a BOM parent or "
+                 "from the material itself being ordered directly (e.g. spares). Off by "
+                 "default for a clean summary view; switch on for a detailed, "
+                 "audit-style view when someone asks 'where did this number come from?'")
         st.divider()
 
+        def _refs_label(refs):
+            # refs: [{"ref": ..., "source_type": ...}, ...] (2026-08-10,
+            # CONTEXT_HANDOFF_v2.md §7m) — source_type is real, visible
+            # info now, not yet used to change any actual prioritization.
+            return ", ".join(f"{r['ref']} ({r['source_type']})" for r in refs) if refs else "—"
+
         if at_risk:
-            st.markdown("##### \U0001f6a8 At Risk — needs a human decision, not a PR")
+            st.markdown("##### 🚨 At Risk — needs a human decision, not a PR")
             st.caption("Normal procurement genuinely can't beat these deadlines. A PR would "
                       "arrive too late regardless — this needs expediting, splitting an "
                       "order, an alternate vendor, or a customer conversation, not a "
                       "system-generated document.")
-            ardf = pd.DataFrame(at_risk)[["mat_desc", "location", "remaining_gap",
-                                          "stockout_date", "days_until_stockout",
-                                          "pipeline_lead_time_days"]]
+            ar_cols = ["mat_desc", "location", "remaining_gap",
+                       "stockout_date", "days_until_stockout", "pipeline_lead_time_days"]
+            ar_names = ["Material", "Location", "Gap", "Stock-Out Date",
+                        "Days Left", "Normal Lead Time (days)"]
+            ardf = pd.DataFrame(at_risk)
+            if show_source:
+                ardf["_source"] = ardf["contributing_refs"].map(_refs_label)
+                ar_cols = ar_cols + ["_source"]
+                ar_names = ar_names + ["Source"]
+            ardf = ardf[ar_cols]
             ardf["location"] = ardf["location"].map(_lname)
-            ardf.columns = ["Material", "Location", "Gap", "Stock-Out Date",
-                            "Days Left", "Normal Lead Time (days)"]
+            ardf.columns = ar_names
             st.dataframe(ardf, use_container_width=True, hide_index=True)
             st.divider()
 
         if action_needed:
-            st.markdown("##### \U0001f4cb Action Needed — timed requisitions")
+            st.markdown("##### 📋 Action Needed — timed requisitions")
             st.caption("Enough lead-time headroom for normal procurement, sized and dated "
                       "to arrive right before the projected stock-out.")
             for i, r in enumerate(action_needed):
                 c1, c2 = st.columns([5, 1])
-                c1.write(f"**{r['mat_desc']}** \u00b7 {_lname(r['location'])} \u00b7 "
+                source_suffix = (f" · source: {_refs_label(r['contributing_refs'])}"
+                                 if show_source else "")
+                c1.write(f"**{r['mat_desc']}** · {_lname(r['location'])} · "
                         f"need **{r['recommended_qty']:g}** by **{r['required_by_date']}** "
                         f"({r['days_until_stockout']}d out, {r['pipeline_lead_time_days']}d "
-                        f"lead time via {r['lead_time_source'].replace('_', ' ')})")
+                        f"lead time via {r['lead_time_source'].replace('_', ' ')})"
+                        f"{source_suffix}")
                 if c2.button("Create PR", key=f"tp_create_pr_{i}"):
                     try:
                         pr_id = f"PR-{date.today().strftime('%Y%m%d')}-{100+i}"
@@ -1520,14 +1820,20 @@ def page_inventory():
             st.divider()
 
         if covered:
-            st.markdown("##### \u2705 Already Covered by an Existing PR/PO")
+            st.markdown("##### ✅ Already Covered by an Existing PR/PO")
             st.caption("A real, in-progress procurement line already addresses this exact "
-                      "gap \u2014 open, in RFP, or already turned into a PO \u2014 so no duplicate "
+                      "gap — open, in RFP, or already turned into a PO — so no duplicate "
                       "gets proposed.")
-            cdf = pd.DataFrame(covered)[["mat_desc", "location", "remaining_gap",
-                                         "covering_pr", "stockout_date"]]
-            cdf.columns = ["Material", "Location", "Gap", "Covering PR", "Needed By"]
-            cdf["Location"] = cdf["Location"].map(_lname)
+            cov_cols = ["mat_desc", "location", "remaining_gap", "covering_pr", "stockout_date"]
+            cov_names = ["Material", "Location", "Gap", "Covering PR", "Needed By"]
+            cdf = pd.DataFrame(covered)
+            if show_source:
+                cdf["_source"] = cdf["contributing_refs"].map(_refs_label)
+                cov_cols = cov_cols + ["_source"]
+                cov_names = cov_names + ["Source"]
+            cdf = cdf[cov_cols]
+            cdf["location"] = cdf["location"].map(_lname)
+            cdf.columns = cov_names
             st.dataframe(cdf, use_container_width=True, hide_index=True)
             st.divider()
 
@@ -1541,16 +1847,14 @@ def page_inventory():
         if not all_positions:
             st.info("No confirmed demand inside the planning horizon yet \u2014 nothing to project.")
         else:
-            labels = {}
-            for i, position in enumerate(all_positions):
-                status = (
-                    f" ⚠️ stock-out {position['stockout_date']}"
-                    if position["stockout_date"]
-                    else " ✅ covered"
-                )
-                labels[i] = (
-                    f"{position['mat_code']} — {_lname(position['location'])}{status}"
-                )
+            _drill_desc = {}
+            for p in all_positions:
+                if p["mat_code"] not in _drill_desc:
+                    item_info = po_export.get_item_by_code(p["mat_code"], active_only=False)
+                    _drill_desc[p["mat_code"]] = item_info["desc"] if item_info else p["mat_code"]
+            labels = {i: f"{_drill_desc[p['mat_code']]} \u2014 {_lname(p['location'])}"
+                     f"{' \u26a0\ufe0f stock-out ' + p['stockout_date'] if p['stockout_date'] else ' \u2705 covered'}"
+                     for i, p in enumerate(all_positions)}
             sel = st.selectbox("Material + location", list(labels.keys()),
                 format_func=lambda k: labels[k], key="tp_drill_sel")
             proj = all_positions[sel]
@@ -1565,18 +1869,84 @@ def page_inventory():
                 edf.columns = ["Date", "Balance", "Event"]
                 st.dataframe(edf, use_container_width=True, hide_index=True)
 
+    # ── TAB 6 — Traceability (TRC-US-01) ──────────────────────────────────────────
+    with tab6:
+        st.caption("A Batch- or Serial-tracked material's on-hand is always resolvable "
+                  "down to the individual lot/serial level, not only the material/Plant "
+                  "aggregate shown in the tabs above — that aggregate figure stays "
+                  "unchanged; this only adds a lower level of detail beneath it.")
+
+        near = trc.get_near_expiry_lots()
+        st.markdown(f"##### ⏳ Near-Expiry (next {trc.NEAR_EXPIRY_WINDOW_DAYS} days)")
+        if near:
+            loc_names_all = {d["id"]: d["name"] for d in load_delivery_locs()}
+            ndf = pd.DataFrame([{
+                "Lot": n["lot_number"], "Material": n["material_desc"],
+                "Location": loc_names_all.get(n["location_id"], n["location_id"]),
+                "Remaining": n["remaining_qty"], "Expiry": n["expiry_date"],
+                "Days Left": n["days_to_expiry"],
+            } for n in near])
+            st.dataframe(ndf, use_container_width=True, hide_index=True)
+        else:
+            st.success("✅ Nothing expiring within the window.")
+
+        st.divider()
+        st.markdown("##### \U0001f4e6 Lots by material")
+        tracked_items = [i for i in po_export.load_item_master() if i.get("code") and
+                        trc.get_tracking_info(i["code"])["tracking_type"] != "None"]
+        if not tracked_items:
+            st.info("No Batch- or Serial-tracked materials in Item Master yet.")
+        else:
+            mat_labels = {i["code"]: f"{i['desc']} ({i['code']})" for i in tracked_items}
+            sel_mat = st.selectbox("Material", list(mat_labels.keys()),
+                                   format_func=lambda k: mat_labels[k], key="trc_mat_sel")
+            lots_for_mat = trc.get_lots_for_material(sel_mat)
+            if lots_for_mat:
+                loc_names_all = {d["id"]: d["name"] for d in load_delivery_locs()}
+                ldf = pd.DataFrame([{
+                    "Lot": l["lot_number"],
+                    "Location": loc_names_all.get(l["location_id"], l["location_id"]),
+                    "Remaining": l["remaining_qty"], "Expiry": l["expiry_date"] or "—",
+                    "Vendor": l["vendor_name"], "GR": l["gr_id"],
+                } for l in lots_for_mat])
+                st.dataframe(ldf, use_container_width=True, hide_index=True)
+            else:
+                st.caption("No lots with remaining quantity for this material.")
+
+        st.divider()
+        st.markdown("##### \U0001f50e Trace a lot or serial number")
+        trace_input = st.text_input("Lot/Batch or Serial Number", key="trc_trace_input")
+        if trace_input:
+            result = trc.trace_lot(trace_input)
+            if result is None:
+                st.warning(f"⚠️ No lot or serial number '{trace_input}' found — "
+                          "never a false empty history, this is a genuine not-found.")
+            else:
+                for entry in result:
+                    lot = entry["lot"]
+                    st.markdown(f"**{lot['lot_number']}** — {lot['material_desc']} "
+                              f"({lot['material_code']}), received {lot['qty_received']:g} "
+                              f"on {lot['received_date']} from {lot['vendor_name']} "
+                              f"({lot['po_number']}, {lot['gr_id']})"
+                              + (f", expires {lot['expiry_date']}" if lot["expiry_date"] else ""))
+                    tdf = pd.DataFrame(entry["transactions"])
+                    if not tdf.empty:
+                        tdf = tdf[["txn_id", "txn_date", "quantity", "txn_type",
+                                  "location_id", "reference_id"]]
+                        tdf.columns = ["Txn", "Date", "Qty", "Type", "Location", "Reference"]
+                        st.dataframe(tdf, use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("No transactions recorded against this lot yet.")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE — Production
 # ══════════════════════════════════════════════════════════════════════════════
 def page_production():
     st.markdown("## \U0001f3ed Production")
-    st.caption("Confirms a build actually happened — the event that was missing until "
-               "now. Consumes every BOM component from inventory at the chosen location "
-               "and produces the finished good there. Record-only, same as everywhere "
-               "else here: a shortage is shown before you confirm, but doesn't block it "
-               "— if you confirm anyway, the balance goes negative honestly rather than "
-               "silently refusing.")
+    st.caption("Confirm a completed build — consumes the components from inventory and "
+               "adds the finished good at the chosen location. A shortage is flagged "
+               "before you confirm, but won't block you.")
     st.divider()
 
     s = prod.stats()
@@ -1609,7 +1979,7 @@ def page_production():
                 # actual inventory consumption/output postings on confirm.
                 location = sel_loc_id
             else:
-                st.warning("No delivery locations set up — add one on the S2P app first.")
+                st.warning("No delivery locations set up — add one under Source to Contract first.")
                 location = ""
 
             if location:

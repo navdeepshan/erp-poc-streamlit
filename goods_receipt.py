@@ -51,6 +51,7 @@ from openpyxl.utils import get_column_letter
 import db
 import pr_consolidation as pc
 import inventory as inv
+import traceability as trc
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.xlsx")
 
@@ -404,7 +405,7 @@ def get_pr_fulfillment_status(pr_number, data_file=None):
 
 
 def create_gr(po_number, line_receipts, delivery_location="", received_by="", notes="",
-              pr_allocations=None, data_file=None):
+              pr_allocations=None, line_lots=None, data_file=None):
     """
     line_receipts: {po_item: qty_received} — keyed by PO line number, NOT
     material code. This changed from material-code-keying after a real
@@ -422,6 +423,14 @@ def create_gr(po_number, line_receipts, delivery_location="", received_by="", no
     it. This is how a human says "80/40 isn't right, PR-002 is more
     urgent, make it 60/60 instead" — the default is a starting point,
     not the only option.
+
+    line_lots (TRC-US-01, 2026-08-09): optional {po_item: {"lot_number":
+    str, "expiry_date": str}} for a Batch-tracked line, or {po_item:
+    {"serials": [str, ...]}} for a Serial-tracked line. Validated for
+    every Batch/Serial-tracked line BEFORE any write happens below — a
+    hard block on the whole GR, exactly the document's own rule, never
+    a partial GR with one line silently missing its required lot/serial
+    data. A None-tracked line needs no entry here at all.
     """
     fpath = data_file or DATA_FILE
     po = _po_header_row(po_number, fpath)
@@ -452,6 +461,17 @@ def create_gr(po_number, line_receipts, delivery_location="", received_by="", no
     lines_to_record = [(pi, qty) for pi, qty in lines_to_record if qty and qty > 0]
     if not lines_to_record:
         raise ValueError("Enter a received quantity greater than zero on at least one line.")
+
+    # TRC-US-01's own hard block: validated for every tracked line before
+    # anything below writes a single row — a Batch/Serial-tracked line
+    # missing its required lot/serial data must block the WHOLE GR, not
+    # just be skipped, since an untracked receipt of a tracked material
+    # would break every downstream trace query.
+    line_lots = line_lots or {}
+    for pi, qty in lines_to_record:
+        lot_data = line_lots.get(pi.get("PO_Item"), {})
+        trc.validate_lot_capture(pi.get("Material_Code"), qty, lot_data.get("lot_number"),
+                                 lot_data.get("serials"), lot_data.get("expiry_date"), fpath)
 
     db.init_schema()
     conn = db.get_connection()
@@ -527,8 +547,26 @@ def create_gr(po_number, line_receipts, delivery_location="", received_by="", no
     # bug class found and fixed in production.py's record_transaction calls).
     for pi, qty in lines_to_record:
         loc = delivery_location or pi.get("Delivery_Location") or "Unspecified"
-        inv.record_transaction(pi.get("Material_Code"), pi.get("Material_Desc"), loc, qty,
-                               "GR Receipt", "GR", gr_id, data_file=fpath)
+        mat_code = pi.get("Material_Code")
+        tracking = trc.get_tracking_info(mat_code, fpath)
+        if tracking["tracking_type"] == "None":
+            inv.record_transaction(mat_code, pi.get("Material_Desc"), loc, qty,
+                                   "GR Receipt", "GR", gr_id, data_file=fpath)
+        else:
+            # One inv.record_transaction() call per lot/serial, not one
+            # for the whole line — this is what makes each lot's own
+            # remaining quantity independently queryable later, since
+            # that figure is never stored, only ever summed live from
+            # exactly these rows (traceability.get_lot_remaining_qty()).
+            lot_data = line_lots.get(pi.get("PO_Item"), {})
+            new_lots = trc.create_lots_for_receipt(
+                mat_code, pi.get("Material_Desc"), qty, loc, po_number,
+                po.get("Supplier_ID"), po.get("Supplier_Name"), gr_id,
+                lot_number=lot_data.get("lot_number"), serials=lot_data.get("serials"),
+                expiry_date=lot_data.get("expiry_date"), data_file=fpath)
+            for lot in new_lots:
+                inv.record_transaction(mat_code, pi.get("Material_Desc"), loc, lot["qty_received"],
+                                       "GR Receipt", "GR", gr_id, lot_id=lot["id"], data_file=fpath)
 
     # ATP-US-03's own real supply-arrival trigger: a GR is one of the two
     # real events (the other being inventory.receive_transfer()) that

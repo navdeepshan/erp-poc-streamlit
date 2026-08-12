@@ -132,9 +132,23 @@ def phase1_bulk_import():
         pc.mark_po_created(po_number)
         raw_items = pc.get_po_items(po_number)
         line_receipts = {it["po_item"]: it["quantity"] for it in raw_items}
+        # TRC-US-01 (2026-08-09): AUTOCLAVE is Serial-tracked, POUCHES is
+        # Batch + Shelf-Life-tracked on Item Master — this is the same
+        # MELAG consignment the document's own worked example describes
+        # almost exactly (30 boxes under one lot, arriving with the
+        # autoclaves' own serials).
+        line_lots = {}
+        for it in raw_items:
+            if it["material_code"] == AUTOCLAVE:
+                qty = int(it["quantity"])
+                line_lots[it["po_item"]] = {"serials": [f"SN-MELAG-AC-{i:04d}" for i in range(1, qty + 1)]}
+            elif it["material_code"] == POUCHES:
+                line_lots[it["po_item"]] = {"lot_number": "LOT-POUCH-2026-001",
+                                            "expiry_date": "2027-06-18"}
         gr_id = gr.create_gr(po_number, line_receipts, delivery_location=CHENNAI,
                              received_by="Chennai Import Desk",
-                             notes=f"Bulk import consignment — {summary['vendor']}")
+                             notes=f"Bulk import consignment — {summary['vendor']}",
+                             line_lots=line_lots)
         acct.post_gr_entry(gr_id)
         _backdate_gr(gr_id, "2026-06-18")
         gr_ids[summary["vendor"]] = gr_id
@@ -242,7 +256,8 @@ def phase6_reorder_pouches():
                  hdr["plant_code"], po_lns)
 
     gr_id = gr.create_gr(po_number, {1: 5}, delivery_location=CHENNAI,
-                         received_by="Chennai Import Desk", notes="Quick reorder — pouches shortfall")
+                         received_by="Chennai Import Desk", notes="Quick reorder — pouches shortfall",
+                         line_lots={1: {"lot_number": "LOT-POUCH-2026-002", "expiry_date": "2027-08-24"}})
     acct.post_gr_entry(gr_id)
     _backdate_gr(gr_id, "2026-07-24")
 

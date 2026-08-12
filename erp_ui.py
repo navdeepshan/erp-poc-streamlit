@@ -29,10 +29,12 @@ import bom
 import categorization
 import rfx
 import vendor_onboarding as vo
+import vendor_scorecard as vsc
 import vrq
 import contracts as ct
 import org_defaults as od
 import legal_entities as le
+import nav_catalog as nav
 
 DATA_FILE = os.path.join(_DIR, "data.xlsx")
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -98,11 +100,6 @@ summary{color:#1E293B!important;font-weight:500!important;padding:12px 16px!impo
 hr{border-color:#E2E8F0!important}
 </style>""", unsafe_allow_html=True)
 
-# Re-apply the suite design system after this legacy page stylesheet so the
-# unified shell remains visually consistent across every workspace.
-from ui_theme import apply_theme
-apply_theme()
-
 # ── Startup check ─────────────────────────────────────────────────────────────
 # Checks erp_pilot.db, not data.xlsx — data.xlsx hasn't been a real runtime
 # dependency for any of these three apps since the SQLite migration; it's
@@ -119,16 +116,23 @@ if not os.path.exists(db.DB_FILE):
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### \U0001f4cb ERP Procurement")
+    st.markdown("### \U0001f4cb AutonoVerse Garage")
+    st.caption("Source to Contract")
     st.divider()
-    page = st.radio("", ["\U0001f4e6  Purchase Bundles",
-                         "\U0001f195  Create PR",
-                         "\U0001f504  Consolidate PRs \u2192 POs",
-                         "\U0001f4e4  Direct PO Entry",
-                         "\U0001f3f7\ufe0f  Auto-Categorization",
-                         "\U0001f4e8  RFx Management",
-                         "\U0001f9fe  Vendor Onboarding",
-                         "\U0001f4dc  Contracts"],
+    _page_options = ["📦  Purchase Bundles",
+                     "🆕  Create PR",
+                     "🔄  Consolidate PRs → POs",
+                     "📤  Direct PO Entry",
+                     "🏷️  Auto-Categorization",
+                     "📨  RFx Management",
+                     "🧾  Vendor Onboarding",
+                     "📜  Contracts"]
+    # `?page=` deep-link support (2026-08-11) for the Agent Console's
+    # own navigation links -- see nav_catalog.py's own docstring. A
+    # normal load with no query param resolves to index 0, identical
+    # to before this existed.
+    page = st.radio("", _page_options,
+                    index=nav.resolve_page_index(_page_options, st.query_params.get("page")),
                     label_visibility="collapsed")
     st.divider()
 
@@ -562,10 +566,9 @@ def page_consolidate():
     st.divider()
 
     with st.expander("\U0001f5fa\ufe0f All POs Map — every PO within the selected date range, not just this session"):
-        st.caption("Shows every PO in PO_Header regardless of when or how it was created "
-                  "— including Direct PO Entry — filtered to the date range below. The map "
-                  "and the line-item list beneath it share the same filter, so a PO is never "
-                  "shown as a route while missing from the list, or vice versa.")
+        st.caption("Shows every PO within the selected date range, including Direct PO Entry. "
+                   "The map and the line-item list below share the same filter, so nothing "
+                   "appears in one but not the other.")
 
         dpo1, dpo2 = st.columns(2)
         with dpo1:
@@ -579,7 +582,9 @@ def page_consolidate():
         if all_geo["routes"]:
             _map(all_geo)
         else:
-            st.info("No POs with a delivery date in this range.")
+            st.info("No plottable routes in this range — either no PO has a delivery date "
+                   "here, or the ones that do are missing a vendor/delivery geolocation "
+                   "(check the list below, which isn't geo-gated).")
 
         st.markdown("##### \U0001f4cb PO Line Items")
 
@@ -1007,11 +1012,9 @@ leg.addTo(map);
 # ══════════════════════════════════════════════════════════════════════════════
 def page_direct_po():
     st.markdown("## \U0001f4e4 Direct PO Entry")
-    st.caption("For POs placed outside the normal PR \u2192 Consolidate flow (e.g. an "
-              "urgent one-off buy). Still records a real PO in the system — Goods "
-              "Receipt, Contracts, and Accounting all see it exactly like any other PO "
-              "— and generates the same downloadable upload file for sending to "
-              "another system, unchanged.")
+    st.caption("For purchase orders placed outside the normal requisition flow — for "
+               "example, an urgent one-off buy. Works exactly like any other PO for "
+               "receiving, contracts, and accounting.")
     st.divider()
     left, right = st.columns([5,4], gap="large")
     with left:
@@ -1117,9 +1120,9 @@ def page_direct_po():
 # ══════════════════════════════════════════════════════════════════════════════
 def page_categorization():
     st.markdown("## \U0001f3f7\ufe0f Autonomous Categorization")
-    st.caption("Rule/taxonomy classifier for the Item Master — no manual tagging, "
-               "no external API. Explainable: every suggestion shows the keywords "
-               "that drove it, so low-confidence items are easy to spot and review.")
+    st.caption("Automatically suggests a category for each item, showing the keywords "
+               "behind each suggestion so low-confidence items are easy to spot and "
+               "review.")
     st.divider()
 
     s = categorization.stats()
@@ -1199,8 +1202,8 @@ def page_categorization():
     with tab_hi:
         edited_hi = _editor(hi_rows, "cat_editor_hi")
     with tab_lo:
-        st.caption("These didn't match enough taxonomy keywords — pick a category "
-                   "manually or leave as Uncategorized.")
+        st.caption("These didn't match closely enough — pick a category manually or leave as "
+                   "Uncategorized.")
         edited_lo = _editor(lo_rows, "cat_editor_lo")
 
     st.divider()
@@ -1222,10 +1225,8 @@ def page_categorization():
 # ══════════════════════════════════════════════════════════════════════════════
 def page_rfx():
     st.markdown("## \U0001f4e8 RFx Management")
-    st.caption("Open RFP lines flow in here from consolidation. The flow is "
-               "vendor-first: invite a vendor to quote on several lines at once, "
-               "get one RFQ document back, pick winners per line, then issue "
-               "**one consolidated PO per vendor** — not one PO per line.")
+    st.caption("Invite vendors to quote on multiple items at once, compare responses, pick "
+               "winners per line, and issue one consolidated purchase order per vendor.")
     st.divider()
 
     rx = rfx.stats()
@@ -1237,9 +1238,10 @@ def page_rfx():
     m5.metric("Invitations", rx["invitations"])
     st.divider()
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "1\ufe0f\u20e3 Select & Invite", "2\ufe0f\u20e3 Enter Quotes",
-        "3\ufe0f\u20e3 Select Winners", f"4\ufe0f\u20e3 Issue POs ({rx['pending_po']})"])
+        "3\ufe0f\u20e3 Select Winners", f"4\ufe0f\u20e3 Issue POs ({rx['pending_po']})",
+        f"\U0001f4dc Award History ({rx['awarded']})"])
 
     # ── TAB 1 — pick RFP lines, suggest vendors, generate the RFQ document ──────
     with tab1:
@@ -1296,9 +1298,17 @@ def page_rfx():
                 suggestions = rfx.suggest_vendors_for_lines(chosen, top_n=6)
                 vendor_lookup = {v["id"]: v for v in rfx.list_vendors()}
                 if suggestions:
-                    sdf = pd.DataFrame(suggestions)[["id","name","city","lines_matched","reason"]]
-                    sdf.columns = ["Vendor","Name","City","Lines matched","Why"]
+                    sdf = pd.DataFrame(suggestions)
+                    sdf["scorecard_display"] = sdf.apply(
+                        lambda r: (f"{r['scorecard_score']:g}" +
+                                  (" (Low Vol.)" if r["scorecard_low_volume"] else ""))
+                                  if r["scorecard_score"] is not None else "—", axis=1)
+                    sdf = sdf[["id","name","city","lines_matched","scorecard_display","reason"]]
+                    sdf.columns = ["Vendor","Name","City","Lines matched","Scorecard","Why"]
                     st.dataframe(sdf, use_container_width=True, hide_index=True)
+                    st.caption("Scorecard is shown for context, not used to rank this list — "
+                              "affinity + proximity answers who can genuinely supply this; the "
+                              "scorecard is a separate, real signal for you to weigh yourself.")
                 else:
                     st.info("No active vendors found in Vendor_Master.")
 
@@ -1538,12 +1548,47 @@ def page_rfx():
                         st.bar_chart(qdf.set_index("vendor_id")["price"], height=160)
 
                         best = min(quotes, key=lambda q: q["price"])
-                        st.info(f"\U0001f4a1 Lowest: **{best['vendor_name']}** at \u20b9{best['price']:,.2f} "
+                        st.info(f"💡 Lowest: **{best['vendor_name']}** at ₹{best['price']:,.2f} "
                                 f"({best['lead_time']}d)")
-                        opts = {q["quote_id"]: f"{q['vendor_name']} — \u20b9{q['price']:,.2f} ({q['lead_time']}d)"
+
+                        st.markdown("###### ❓ Request More Info")
+                        st.caption("Before committing to a winner, ask a vendor a follow-up "
+                                  "question - a clarification on spec, MOQ, or lead time. "
+                                  "Doesn't block selecting a winner; it's here so the question "
+                                  "and its answer sit next to the quote they're about.")
+                        existing_clr = rfx.get_clarifications(rfp_number=sel)
+                        if existing_clr:
+                            for c in existing_clr:
+                                if c["status"] == "Answered":
+                                    st.write(f"**{c['vendor_name']}** — Q: {c['question']}")
+                                    st.success(f"✅ A: {c['answer']}")
+                                else:
+                                    st.write(f"**{c['vendor_name']}** — Q: {c['question']}")
+                                    with st.form(key=f"rfx_clr_ans_{c['clarification_id']}"):
+                                        ans = st.text_input("Vendor's answer",
+                                            key=f"rfx_clr_ans_txt_{c['clarification_id']}")
+                                        if st.form_submit_button("Record Answer") and ans:
+                                            rfx.record_clarification_response(c["clarification_id"], ans)
+                                            st.cache_data.clear()
+                                            st.rerun()
+                        with st.form(key="rfx_clr_new"):
+                            clr_quote_id = st.selectbox("Ask", [q["quote_id"] for q in quotes],
+                                format_func=lambda qid: next(q["vendor_name"] for q in quotes if q["quote_id"] == qid),
+                                key="rfx_clr_vendor")
+                            clr_question = st.text_area("Question", key="rfx_clr_question", height=68)
+                            if st.form_submit_button("📨 Send Question") and clr_question.strip():
+                                clr_quote = next(q for q in quotes if q["quote_id"] == clr_quote_id)
+                                rfx.request_clarification(sel, clr_quote["vendor_id"], clr_quote["vendor_name"],
+                                    clr_question.strip(), quote_id=clr_quote_id)
+                                st.cache_data.clear()
+                                st.success(f"Question logged for {clr_quote['vendor_name']}.")
+                                st.rerun()
+                        st.divider()
+
+                        opts = {q["quote_id"]: f"{q['vendor_name']} — ₹{q['price']:,.2f} ({q['lead_time']}d)"
                                 for q in quotes}
                         pick = st.selectbox("Select winner", list(opts.keys()), format_func=lambda k: opts[k], key="rfx_wpick")
-                        if st.button("\u2705  Mark as Winner (doesn't issue PO yet)", type="primary", key="rfx_wbtn"):
+                        if st.button("✅  Mark as Winner (doesn't issue PO yet)", type="primary", key="rfx_wbtn"):
                             rfx.select_winner(sel, pick)
                             st.cache_data.clear()
                             st.success("Marked. Head to the **Issue POs** tab to consolidate and issue.")
@@ -1638,17 +1683,60 @@ def page_rfx():
                     st.code(traceback.format_exc())
 
 
+    # ── TAB 5 — read-only history: every RFx already fully awarded ────────────────────
+    with tab5:
+        st.caption("Once a line's PO is issued it drops out of every tab above — this is "
+                  "the one place its own award decision is still browsable: every vendor "
+                  "who quoted, and why the winner won, exactly as it was at award time.")
+        awarded = rfx.get_rfps_by_status(["Awarded"])
+        if not awarded:
+            st.info("No RFx has been awarded yet.")
+        else:
+            cat_by_mat_h = {}
+            for r in awarded:
+                if r["mat_code"] not in cat_by_mat_h:
+                    item = po_export.get_item_by_code(r["mat_code"], active_only=False)
+                    cat_by_mat_h[r["mat_code"]] = (item["category"] if item else "") or "Uncategorized"
+            categories_h = sorted({cat_by_mat_h[r["mat_code"]] for r in awarded})
+            cat_filter_h = st.multiselect("Filter by category", categories_h,
+                default=categories_h, key="rfx_hcat_filter")
+            awarded = [r for r in awarded if cat_by_mat_h[r["mat_code"]] in cat_filter_h]
+
+            labels_h = {r["rfp_number"]: f"{r['rfp_number']} — {r['mat_desc']}" for r in awarded}
+            sel_h = st.selectbox("Awarded RFx", list(labels_h.keys()),
+                                 format_func=lambda k: labels_h[k], key="rfx_hsel")
+
+            quotes_h = rfx.get_quotes(rfp_number=sel_h)
+            if not quotes_h:
+                st.caption("No quote records on file for this line — likely assigned "
+                          "directly via **⚡ Skip RFx** rather than competitively quoted.")
+            else:
+                qdf_h = pd.DataFrame(quotes_h).sort_values("price")
+                show_h = qdf_h[["vendor_id", "vendor_name", "price", "lead_time", "moq", "status"]].rename(
+                    columns={"vendor_id": "Vendor", "vendor_name": "Name", "price": "Price (₹)",
+                             "lead_time": "Lead (d)", "moq": "MOQ", "status": "Decision"})
+                st.dataframe(show_h, use_container_width=True, hide_index=True)
+                st.bar_chart(qdf_h.set_index("vendor_id")["price"], height=160)
+
+                winner = next((q for q in quotes_h if q["status"] == "Awarded"), None)
+                if winner:
+                    st.success(f"🏆 Won by **{winner['vendor_name']}** at "
+                              f"₹{winner['price']:,.2f} ({winner['lead_time']}d) — "
+                              f"{len(quotes_h)} vendor(s) quoted, {len(quotes_h) - 1} not selected.")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 6 — Vendor Onboarding
 # ══════════════════════════════════════════════════════════════════════════════
 def page_vendor_onboarding():
     st.markdown("## \U0001f9fe Vendor Onboarding")
-    st.caption("Two ways in: direct intake, or send a Vendor Registration "
-               "Questionnaire (VRQ) and promote it once it's back — same "
-               "GSTIN/PAN validation and approval gate either way.")
+    st.caption("Onboard a vendor directly, or send them a registration questionnaire to "
+               "fill in and approve once it's back. Either way, GSTIN/PAN details are "
+               "validated before approval.")
     st.divider()
 
-    tab1, tab2 = st.tabs(["\U0001f4cb Vendors", "\U0001f4dd VRQ Requests"])
+    tab1, tab2, tab3 = st.tabs(["\U0001f4cb Vendors", "\U0001f4dd VRQ Requests",
+                                "\U0001f4ca Scorecard"])
 
     # ── TAB 1 — vendor list + direct intake (unchanged from before) ─────────────
     with tab1:
@@ -1755,8 +1843,7 @@ def page_vendor_onboarding():
         if vendors:
             st.divider()
             st.markdown("#### \U0001f4ce Document Log")
-            st.caption("Reference-only for now — logs that a document was received; "
-                       "upload + OCR extraction is the next slice, not built yet.")
+            st.caption("Logs that a document was received for this vendor.")
             dv = st.selectbox("Vendor", [v["Vendor_ID"] for v in vendors], key="vo_doc_vendor")
             c1, c2, c3 = st.columns([2, 2, 3])
             with c1:
@@ -1781,9 +1868,8 @@ def page_vendor_onboarding():
 
     # ── TAB 2 — Vendor Registration Questionnaire ────────────────────────────────
     with tab2:
-        st.caption("Mirrors how large enterprises (checked against Adani Group's "
-                   "published process) actually run vendor intake: send a "
-                   "questionnaire \u2192 vendor completes it \u2192 review \u2192 promote.")
+        st.caption("Mirrors how large enterprises actually run vendor intake: send a "
+                   "questionnaire → vendor completes it → review → promote.")
         vs = vrq.stats()
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total VRQs", vs["total"])
@@ -1895,17 +1981,103 @@ def page_vendor_onboarding():
                         st.success(f"{sel} marked Rejected.")
                         st.rerun()
 
+    # ── TAB 3 — Vendor Scorecard (VSC-US-01/02) ──────────────────────────────────────────────────────────────
+    with tab3:
+        st.caption("Blends four components — on-time delivery %, quality reject rate, price "
+                   "consistency, and buyer rating — into one weighted score (default "
+                   "30/30/20/20, configurable). A vendor with too few closed POs is flagged "
+                   "Low Volume rather than hidden. A component with no data yet is left out, "
+                   "and its weight is redistributed across the rest.")
+
+        cards = vsc.get_all_scorecards()
+        if not cards:
+            st.info("No active vendors yet.")
+        else:
+            cdf = pd.DataFrame(cards)
+            show = cdf[["vendor_id", "overall_score", "low_volume", "closed_po_count",
+                       "on_time_pct", "quality_reject_pct", "price_consistency_score",
+                       "aggregated_rating"]].copy()
+            show.columns = ["Vendor", "Score", "Low Vol.", "Closed POs", "On-Time %",
+                           "Reject %", "Price Consistency", "Avg Rating"]
+            show = show.sort_values("Score", ascending=False, na_position="last")
+            st.dataframe(show, use_container_width=True, hide_index=True)
+
+            st.divider()
+            st.markdown("##### 🔍 Drill into one vendor")
+            vendor_names = {v["Vendor_ID"]: v["Vendor_Name"] for v in vo.list_vendors(include_inactive=False)}
+            sel_v = st.selectbox("Vendor", list(vendor_names.keys()),
+                format_func=lambda k: f"{k} — {vendor_names[k]}", key="vsc_drill_sel")
+            card = vsc.get_vendor_scorecard(sel_v)
+
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Overall", card["overall_score"] if card["overall_score"] is not None else "—")
+            m2.metric("On-Time %", card["on_time_pct"] if card["on_time_pct"] is not None else "—",
+                      help=f"{card['on_time_sample']} real line(s) measured")
+            m3.metric("Reject %", card["quality_reject_pct"] if card["quality_reject_pct"] is not None else "—",
+                      help=f"{card['quality_sample']} real inspected line(s)")
+            m4.metric("Price Consistency", card["price_consistency_score"] if card["price_consistency_score"] is not None else "—",
+                      help=f"{card['price_sample']} material(s) with real repeat pricing")
+            m5.metric("Avg Rating", f"{card['aggregated_rating']:g}/5" if card["aggregated_rating"] is not None else "—",
+                      help=f"{card['rating_sample']} real rating(s)")
+            if card["low_volume"]:
+                st.warning(f"⚠️ Low Volume — only {card['closed_po_count']} real Closed PO(s) "
+                          f"on file. This score is real, but thin.")
+            if card["rtv_count"]:
+                st.caption(f"📦 {card['rtv_count']} confirmed Return-to-Vendor shipment(s) on "
+                          f"file — supporting context, not double-counted into the reject rate above.")
+
+            ratings = vsc.get_ratings(vendor_id=sel_v)
+            if ratings:
+                st.markdown("##### 💬 Ratings & Reviews")
+                for r in ratings:
+                    stars = "⭐" * r["rating"]
+                    st.write(f"**{stars}** ({r['po_number']}, by {r['rated_by']}, {r['rating_date']}) "
+                            f"— {r['review'] or '*no review text*'}")
+                    if r["vendor_response"]:
+                        st.caption(f"↳ Vendor response ({r['vendor_response_date']}): {r['vendor_response']}")
+                    else:
+                        with st.form(key=f"vsc_resp_{r['rating_id']}"):
+                            resp_text = st.text_input("Vendor's response", key=f"vsc_resp_txt_{r['rating_id']}")
+                            if st.form_submit_button("Record Response") and resp_text:
+                                vsc.respond_to_rating(r["rating_id"], resp_text)
+                                st.cache_data.clear()
+                                st.rerun()
+
+            st.divider()
+            st.markdown("##### ➕ Rate a vendor")
+            st.caption("Gated on a real Closed PO — every line Fully Received. One rating "
+                      "per PO per rater, immutable once submitted.")
+            rater = st.text_input("Your name", key="vsc_rater")
+            eligible = vsc.get_unrated_closed_pos(sel_v, rater) if rater else []
+            if not rater:
+                st.caption("Enter your name to see which Closed POs you haven't rated yet.")
+            elif not eligible:
+                st.caption("No unrated Closed POs for this vendor right now.")
+            else:
+                po_labels = {h["po_number"]: f"{h['po_number']} ({h['po_date']})" for h in eligible}
+                sel_po = st.selectbox("Closed PO", list(po_labels.keys()),
+                    format_func=lambda k: po_labels[k], key="vsc_rate_po")
+                rating_val = st.slider("Rating", 1, 5, 4, key="vsc_rate_val")
+                review_text = st.text_area("Review", key="vsc_rate_review", height=68)
+                if st.button("✅ Submit Rating", type="primary", key="vsc_rate_submit"):
+                    try:
+                        vsc.rate_vendor(sel_po, sel_v, rater, rating_val, review_text)
+                        st.cache_data.clear()
+                        st.success(f"✅ Rated {sel_v} {rating_val}/5 for {sel_po}.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ {e}")
+
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 7 — Contracts
 # ══════════════════════════════════════════════════════════════════════════════
 def page_purchase_bundles():
     st.markdown("## \U0001f4e6 Purchase Bundles")
-    st.caption("Named, reusable sets of materials + default quantities — a requester "
-               "picks a bundle instead of hunting down each item individually. "
-               "Flat, procurement-only (no relationship to BOM or production). "
-               "Bundles are picked from the **Purchase Bundles** tab on the "
-               "Create PR page; once picked, their items are ordinary PR lines.")
+    st.caption("Named, reusable sets of materials with default quantities — a requester "
+               "picks a bundle instead of adding each item individually. Bundles are "
+               "available from the Purchase Bundles tab on the Create PR page.")
     st.divider()
 
     s = pbdl.stats()
@@ -2066,12 +2238,9 @@ def page_purchase_bundles():
 
     # ── TAB 3 — agent-assisted discovery from real PO history ───────────────────
     with tab_discover:
-        st.caption("Analyzes real Purchase Order line-item co-occurrence — materials "
-                  "that repeatedly appear together on the same PO — and proposes "
-                  "candidate bundles nobody's defined yet. Never creates anything on "
-                  "its own: every candidate below is a proposal, with the exact POs "
-                  "behind it as evidence, requiring an explicit action before it "
-                  "becomes a real, selectable bundle.")
+        st.caption("Finds materials that repeatedly appear together on the same purchase order "
+                   "and proposes candidate bundles. Nothing is created automatically — each "
+                   "candidate is a proposal you can review and turn into a real bundle.")
         min_count = st.slider("Minimum repeat count to count as a pattern", 2, 5, 2,
                               key="bdl_discover_min")
         candidates = pbdl.discover_bundle_candidates(min_po_count=min_count)
@@ -2108,9 +2277,9 @@ def page_purchase_bundles():
 
 def page_contracts():
     st.markdown("## \U0001f4dc Contract Management")
-    st.caption("Convert an awarded PO into a rate contract — locked pricing for "
-               "a validity window. Future PR lines for a contracted item skip "
-               "RFx entirely and go straight to a priced PO with the same vendor.")
+    st.caption("Convert an awarded purchase order into a rate contract with locked pricing "
+               "for a validity window. Future requisitions for a contracted item go "
+               "straight to a priced PO with the same vendor, no quoting needed.")
     st.divider()
 
     s = ct.stats()

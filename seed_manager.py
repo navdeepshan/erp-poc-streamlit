@@ -75,12 +75,13 @@ ACCOUNT_TYPES = {"Asset", "Liability", "Revenue", "Expense"}
 TRANSACTIONAL_TABLES = [
     "pr_items", "pr_header", "po_items", "po_header", "rfp",
     "vendor_documents", "contracts", "contract_items",
-    "vrq_requests", "vrq_responses", "rfx_quotes", "rfx_invitations",
-    "gr_header", "gr_items", "quality_inspections",
+    "vrq_requests", "vrq_responses", "rfx_quotes", "rfx_invitations", "rfx_clarifications",
+    "gr_header", "gr_items", "quality_inspections", "quality_holds", "rtv_shipments",
+    "vendor_ratings", "rmas", "credit_memos", "lots",
     "production_confirmations", "inventory_transactions", "stock_transfers",
     "customer_documents", "quotes", "quote_items",
     "sales_orders", "sales_order_items", "fulfillments", "fulfillment_items",
-    "invoices", "invoice_items", "journal_entries", "journal_entry_lines",
+    "invoices", "invoice_items", "e_invoices", "journal_entries", "journal_entry_lines",
     "payments", "payment_applications",
     "vendor_invoices", "vendor_invoice_payments",
     "sto_header", "sto_lines", "reservations", "backorders",
@@ -182,6 +183,10 @@ def validate_seed_file(file_path):
             if not ok:
                 errors.append(f"Org_Profile: PAN '{pan}' invalid — {msg}")
         parsed["org_profile"] = {c: _get(r, headers, c) for c in req_cols}
+        # Pincode is optional at the file level (2026-08-10, gst_einvoice.py's
+        # own SellerDtls.Pin) so an older seed file without the column still
+        # validates clean — _get() already returns None for a missing header.
+        parsed["org_profile"]["Pincode"] = _get(r, headers, "Pincode")
     summary["Org_Profile"] = len(rows)
 
     # ---- Org_Defaults ----
@@ -275,7 +280,15 @@ def validate_seed_file(file_path):
     # addition should still validate and load cleanly rather than fail
     # outright over a column that didn't exist yet when it was built.
     has_weight_col = "Weight_KG" in headers
-    read_cols = req_cols + (["Weight_KG"] if has_weight_col else [])
+    # Tracking_Type / Shelf_Life_Tracked are the identical kind of
+    # deliberately-optional addition Weight_KG already is (TRC-US-01,
+    # 2026-08-09) -- a seed file predating this should still load
+    # cleanly, every item defaulting to untracked, not fail outright.
+    has_tracking_col = "Tracking_Type" in headers
+    has_shelf_life_col = "Shelf_Life_Tracked" in headers
+    read_cols = (req_cols + (["Weight_KG"] if has_weight_col else [])
+                + (["Tracking_Type"] if has_tracking_col else [])
+                + (["Shelf_Life_Tracked"] if has_shelf_life_col else []))
     missing_cols = [c for c in req_cols if c not in headers]
     item_codes = set()
     if missing_cols:
@@ -301,6 +314,13 @@ def validate_seed_file(file_path):
             row_dict = {c: _get(r, headers, c) for c in read_cols}
             if not has_weight_col:
                 row_dict["Weight_KG"] = None
+            # A blank cell (column exists but this row's value is empty)
+            # means the same thing as the column not existing at all --
+            # untracked -- not a null tracking type to guess at later.
+            if not row_dict.get("Tracking_Type"):
+                row_dict["Tracking_Type"] = "None"
+            if not row_dict.get("Shelf_Life_Tracked"):
+                row_dict["Shelf_Life_Tracked"] = "No"
             out.append(row_dict)
         parsed["item_master"] = out
     summary["Item Master"] = len(rows)
@@ -423,7 +443,11 @@ def validate_seed_file(file_path):
             limit = _get(r, headers, "Credit_Limit")
             if limit is not None and str(limit).strip() != "" and _num(limit) is None:
                 errors.append(f"Customer_Master '{cid}': Credit_Limit '{limit}' isn't numeric")
-            out.append({c: _get(r, headers, c) for c in req_cols})
+            row_out = {c: _get(r, headers, c) for c in req_cols}
+            # Pincode is optional at the file level, same reasoning as
+            # Org_Profile above — BuyerDtls.Pin for gst_einvoice.py.
+            row_out["Pincode"] = _get(r, headers, "Pincode")
+            out.append(row_out)
         parsed["customer_master"] = out
     summary["Customer_Master"] = len(rows)
 
@@ -539,11 +563,11 @@ def reset_and_reseed(file_path):
         op = parsed["org_profile"]
         conn.execute(
             "INSERT INTO org_profile (org_id, legal_name, gstin, pan, address, city, "
-            "state, country, bank_account_no, ifsc, bank_name, contact_email, contact_phone) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "state, country, pincode, bank_account_no, ifsc, bank_name, contact_email, "
+            "contact_phone) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (op["Org_ID"], op["Legal_Name"], op["GSTIN"], op["PAN"], op["Address"],
-             op["City"], op["State"], op["Country"], op["Bank_Account_No"], op["IFSC"],
-             op["Bank_Name"], op["Contact_Email"], op["Contact_Phone"]))
+             op["City"], op["State"], op["Country"], op.get("Pincode"), op["Bank_Account_No"],
+             op["IFSC"], op["Bank_Name"], op["Contact_Email"], op["Contact_Phone"]))
         seed_counts["org_profile"] = 1
 
         for el, val in parsed["org_defaults"]:
@@ -572,11 +596,12 @@ def reset_and_reseed(file_path):
             conn.execute(
                 "INSERT INTO item_master (item_code, item_desc, category, subcategory, uom, "
                 "unit_price, lead_time_days, in_stock, tags, active, hsn_code, gst_rate, "
-                "weight_kg) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "weight_kg, tracking_type, shelf_life_tracked) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (it["Item Code"], it["Item Description"], it["Category"], it["Sub-Category"],
                  it["Unit of Measure"], _num(it["Unit Price"]), it["Lead Time (days)"],
                  it["In Stock"], it["Tags / Keywords"], it["Active"], it["HSN_Code"],
-                 _num(it["GST_Rate"]), _num(it.get("Weight_KG"))))
+                 _num(it["GST_Rate"]), _num(it.get("Weight_KG")),
+                 it.get("Tracking_Type", "None"), it.get("Shelf_Life_Tracked", "No")))
         seed_counts["item_master"] = len(parsed["item_master"])
 
         for vt in parsed["vendor_types"]:
@@ -604,12 +629,13 @@ def reset_and_reseed(file_path):
                 "INSERT INTO customer_master (customer_id, customer_name, customer_type, "
                 "geolocation, city, country, address, contact_name, contact_email, contact_phone, "
                 "gstin, pan, credit_limit, credit_status, payment_terms, onboarding_status, "
-                "kyc_flag, onboarded_date, active) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "kyc_flag, onboarded_date, active, pincode) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (c["Customer_ID"], c["Customer_Name"], c["Customer_Type"], c["Geolocation"],
                  c["City"], c["Country"], c["Address"], c["Contact_Name"], c["Contact_Email"],
                  c["Contact_Phone"], c["GSTIN"], c["PAN"], _num(c["Credit_Limit"]),
                  c["Credit_Status"], c["Payment_Terms"], c["Onboarding_Status"], c["KYC_Flag"],
-                 c["Onboarded_Date"], c["Active"]))
+                 c["Onboarded_Date"], c["Active"], c.get("Pincode")))
         seed_counts["customer_master"] = len(parsed["customer_master"])
 
         for b in parsed["bom_items"]:

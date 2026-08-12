@@ -43,6 +43,28 @@ BANDICOOT = "GRB-FG-0001"
 UNIT_PRICE = 1200000  # a believable market price for a fielded municipal robotic unit
 
 
+def _geo(location_id):
+    """Live lookup, not a hardcoded copy of Delivery_Locations' own
+    real coordinates — found and fixed 2026-08-11 after exactly this
+    class of bug: FACTORY's own literal was correct everywhere it was
+    copied, but RND's ("8.5241,76.9366") had quietly drifted from the
+    real seeded value (8.5578,76.8807), and phase1_historical_stock()'s
+    four lines had never carried any deliv_geo at all — silently
+    missing every route on the S2C app's 'All POs Map'
+    (pr_consolidation.build_all_pos_geo_data() skips a route missing
+    either endpoint's geolocation) despite the PO genuinely existing,
+    same bug class demo_scenario_ids.py's own phase1_bulk_import()
+    docstring already names and fixed once for Chennai. Every call site
+    below reads live from Delivery_Locations now, so a location's own
+    geo can never again drift out of sync with a copy pasted into this
+    file."""
+    import pr_consolidation as _pc
+    for loc in _pc.get_delivery_locations(active_only=False):
+        if loc["id"] == location_id:
+            return loc.get("geo", "")
+    return ""
+
+
 def _backdate_gr(gr_id, new_date):
     """create_gr() always dates itself today — this patches the date
     fields a person actually sees (GR date, its journal entry, its
@@ -82,14 +104,16 @@ def phase1_historical_stock():
          "currency": "INR", "plant_code": "PLANT-01", "supplier_id": "COSTAPWR",
          "supplier_name": "Costa Power Industries Pvt Ltd", "supplier_geo": ""},
         [{"mat_code": BATTERY, "mat_desc": "Lithium-Ion Battery Pack 24V 20Ah", "uom": "pcs",
-          "qty": 6, "unit_price": 24000, "deliv_date": "2026-06-15", "deliv_loc": RND, "deliv_geo": "",
+          "qty": 6, "unit_price": 24000, "deliv_date": "2026-06-15", "deliv_loc": RND, "deliv_geo": _geo(RND),
           "source_pr": "", "source_pr_line": "", "req_id": "", "req_dept": "", "project_id": "PILOT-BATCH-1"},
          {"mat_code": SERVO, "mat_desc": "Servo Motor 12V High Torque Arm Joint Drive", "uom": "pcs",
-          "qty": 6, "unit_price": 8500, "deliv_date": "2026-06-15", "deliv_loc": RND, "deliv_geo": "",
+          "qty": 6, "unit_price": 8500, "deliv_date": "2026-06-15", "deliv_loc": RND, "deliv_geo": _geo(RND),
           "source_pr": "", "source_pr_line": "", "req_id": "", "req_dept": "", "project_id": "PILOT-BATCH-1"}])
     pc.mark_po_created("PO-DEMO-RND1")
     gr_rnd = gr.create_gr("PO-DEMO-RND1", {1: 6, 2: 6}, delivery_location=RND,
-                          received_by="R&D Team", notes="Pilot batch build stock")
+                          received_by="R&D Team", notes="Pilot batch build stock",
+                          line_lots={1: {"lot_number": "LOT-BATT-2026-001", "expiry_date": "2028-06-15"},
+                                     2: {"serials": [f"SN-SERVO-{i:04d}" for i in range(1, 7)]}})
     acct.post_gr_entry(gr_rnd)
     _backdate_gr(gr_rnd, "2026-06-15")
 
@@ -98,14 +122,16 @@ def phase1_historical_stock():
          "currency": "INR", "plant_code": "PLANT-01", "supplier_id": "COSTAPWR",
          "supplier_name": "Costa Power Industries Pvt Ltd", "supplier_geo": ""},
         [{"mat_code": BATTERY, "mat_desc": "Lithium-Ion Battery Pack 24V 20Ah", "uom": "pcs",
-          "qty": 2, "unit_price": 24000, "deliv_date": "2026-07-06", "deliv_loc": FACTORY, "deliv_geo": "",
+          "qty": 2, "unit_price": 24000, "deliv_date": "2026-07-06", "deliv_loc": FACTORY, "deliv_geo": _geo(FACTORY),
           "source_pr": "", "source_pr_line": "", "req_id": "", "req_dept": "", "project_id": ""},
          {"mat_code": SERVO, "mat_desc": "Servo Motor 12V High Torque Arm Joint Drive", "uom": "pcs",
-          "qty": 2, "unit_price": 8500, "deliv_date": "2026-07-06", "deliv_loc": FACTORY, "deliv_geo": "",
+          "qty": 2, "unit_price": 8500, "deliv_date": "2026-07-06", "deliv_loc": FACTORY, "deliv_geo": _geo(FACTORY),
           "source_pr": "", "source_pr_line": "", "req_id": "", "req_dept": "", "project_id": ""}])
     pc.mark_po_created("PO-DEMO-FAC1")
     gr_fac = gr.create_gr("PO-DEMO-FAC1", {1: 2, 2: 2}, delivery_location=FACTORY,
-                          received_by="Factory Stores", notes="Routine restock")
+                          received_by="Factory Stores", notes="Routine restock",
+                          line_lots={1: {"lot_number": "LOT-BATT-2026-002", "expiry_date": "2028-07-06"},
+                                     2: {"serials": ["SN-SERVO-0007", "SN-SERVO-0008"]}})
     acct.post_gr_entry(gr_fac)
     _backdate_gr(gr_fac, "2026-07-06")
 
@@ -123,13 +149,13 @@ def phase2_demand():
     so_mcc = so.create_direct_order("MCC",
         [{"mat_code": BANDICOOT, "mat_desc": "Bandicoot Robotic Scavenger - Standard Unit",
           "uom": "pcs", "qty": 3, "unit_price": UNIT_PRICE}],
-        delivery_location=FACTORY, delivery_geo="10.7976,76.7430",
+        delivery_location=FACTORY, delivery_geo=_geo(FACTORY),
         requested_delivery_date="2026-08-15",
         notes="Multi-ward sewer-cleaning fleet rollout — Mysore City Corporation")
     so_imc = so.create_direct_order("IMC",
         [{"mat_code": BANDICOOT, "mat_desc": "Bandicoot Robotic Scavenger - Standard Unit",
           "uom": "pcs", "qty": 1, "unit_price": UNIT_PRICE}],
-        delivery_location=FACTORY, delivery_geo="10.7976,76.7430",
+        delivery_location=FACTORY, delivery_geo=_geo(FACTORY),
         requested_delivery_date="2026-08-10",
         notes="URGENT — Indore Municipal Corporation priority unit")
 
@@ -168,7 +194,7 @@ def phase4_procure_remaining_servo_motors():
                 lines=[{"vendor": "", "mat_code": SERVO,
                         "mat_desc": "Servo Motor 12V High Torque Arm Joint Drive",
                         "uom": "pcs", "qty": 4, "req_date": "2026-07-28",
-                        "deliv_loc": FACTORY, "deliv_geo": "10.7976,76.7430"}])
+                        "deliv_loc": FACTORY, "deliv_geo": _geo(FACTORY)}])
     result = pc.run()
 
     rfp_number = None
@@ -196,7 +222,9 @@ def phase4_procure_remaining_servo_motors():
                  hdr["purchasing_group"], hdr["currency"], hdr["plant_code"], po_lns)
 
     gr_id = gr.create_gr(po_number, {1: 4}, delivery_location=FACTORY,
-                         received_by="Factory Stores", notes="Servo motor top-up — RFx award")
+                         received_by="Factory Stores", notes="Servo motor top-up — RFx award",
+                         line_lots={1: {"serials": ["SN-SERVO-0009", "SN-SERVO-0010",
+                                                     "SN-SERVO-0011", "SN-SERVO-0012"]}})
     acct.post_gr_entry(gr_id)
     _backdate_gr(gr_id, "2026-07-24")
 
@@ -224,7 +252,7 @@ def phase5_bundle_procurement():
     pr_id = "PR-20260721-102"
     pr_lines = [{"vendor": l["vendor"], "mat_code": l["code"], "mat_desc": l["desc"],
                 "uom": l["uom"], "qty": l["qty"], "req_date": "2026-07-25",
-                "deliv_loc": FACTORY, "deliv_geo": "10.7976,76.7430"} for l in lines]
+                "deliv_loc": FACTORY, "deliv_geo": _geo(FACTORY)} for l in lines]
     pc.create_pr(pr_id, requester_id="REQ-PROD", requester_name="Production Planning",
                 requester_dept="Manufacturing", project_id="MCC-IMC-FLEET", lines=pr_lines,
                 pr_date="2026-07-21")
@@ -447,7 +475,7 @@ def phase9_time_phased_planning_demo():
                 lines=[{"vendor": "", "mat_code": "GRB-MEC-0009",
                         "mat_desc": "Universal Joint Coupling Precision Ground",
                         "uom": "pcs", "qty": 8, "req_date": "2026-08-10",
-                        "deliv_loc": FACTORY, "deliv_geo": "10.7976,76.7430"}])
+                        "deliv_loc": FACTORY, "deliv_geo": _geo(FACTORY)}])
 
     pc.create_pr("PR-20260901-202", requester_id="REQ-PROD", requester_name="Production Planning",
                 requester_dept="Manufacturing", project_id="TIME-PHASED-DEMO",
@@ -455,7 +483,7 @@ def phase9_time_phased_planning_demo():
                 lines=[{"vendor": "", "mat_code": SERVO,
                         "mat_desc": "Servo Motor 12V High Torque Arm Joint Drive",
                         "uom": "pcs", "qty": 6, "req_date": "2026-08-05",
-                        "deliv_loc": FACTORY, "deliv_geo": "10.7976,76.7430"}])
+                        "deliv_loc": FACTORY, "deliv_geo": _geo(FACTORY)}])
 
     pc.create_pr("PR-20260901-203", requester_id="REQ-RND", requester_name="R&D Stores",
                 requester_dept="R&D", project_id="TIME-PHASED-DEMO",
@@ -463,14 +491,14 @@ def phase9_time_phased_planning_demo():
                 lines=[{"vendor": "", "mat_code": SERVO,
                         "mat_desc": "Servo Motor 12V High Torque Arm Joint Drive",
                         "uom": "pcs", "qty": 8, "req_date": "2026-10-15",
-                        "deliv_loc": RND, "deliv_geo": "8.5241,76.9366"}])
+                        "deliv_loc": RND, "deliv_geo": _geo(RND)}])
     pc.create_pr("PR-20260901-204", requester_id="REQ-PROD", requester_name="Production Planning",
                 requester_dept="Manufacturing", project_id="TIME-PHASED-DEMO",
                 pr_date="2026-08-27",
                 lines=[{"vendor": "", "mat_code": SERVO,
                         "mat_desc": "Servo Motor 12V High Torque Arm Joint Drive",
                         "uom": "pcs", "qty": 5, "req_date": "2026-10-20",
-                        "deliv_loc": RND, "deliv_geo": "8.5241,76.9366"}])
+                        "deliv_loc": RND, "deliv_geo": _geo(RND)}])
 
     return {"already_covered_pr": "PR-20260901-201", "insufficient_lead_time_pr": "PR-20260901-202",
             "duplicate_prs": ["PR-20260901-203", "PR-20260901-204"]}
@@ -501,11 +529,11 @@ def phase10_bundle_discovery_demo():
     lines_common = [
         {"mat_code": "GRB-ASM-0002", "mat_desc": "Camera & Sensor Module - Complete Unit",
          "uom": "pcs", "unit_price": 68000.0, "deliv_date": "2026-08-20",
-         "deliv_loc": FACTORY, "deliv_geo": "10.7976,76.7430",
+         "deliv_loc": FACTORY, "deliv_geo": _geo(FACTORY),
          "source_pr": "", "source_pr_line": "", "req_id": "", "req_dept": "", "project_id": ""},
         {"mat_code": "GRB-ASM-0004", "mat_desc": "Control & Power Module Assembly",
          "uom": "pcs", "unit_price": 72000.0, "deliv_date": "2026-08-20",
-         "deliv_loc": FACTORY, "deliv_geo": "10.7976,76.7430",
+         "deliv_loc": FACTORY, "deliv_geo": _geo(FACTORY),
          "source_pr": "", "source_pr_line": "", "req_id": "", "req_dept": "", "project_id": ""},
     ]
     for po_number, qty in [("PO-DEMO-ASM1", 3), ("PO-DEMO-ASM2", 2)]:
@@ -549,7 +577,7 @@ def phase11_multi_pr_consolidation_demo():
                      lines=[{"vendor": "", "mat_code": material["mat_code"],
                              "mat_desc": material["mat_desc"], "uom": material["uom"],
                              "qty": qty, "req_date": "2026-09-15", "deliv_loc": FACTORY,
-                             "deliv_geo": "10.7976,76.7430"}])
+                             "deliv_geo": _geo(FACTORY)}])
     return {"prs_created": [r[0] for r in requesters], "material": material["mat_desc"],
             "combined_qty": sum(r[4] for r in requesters)}
 
@@ -661,13 +689,13 @@ def phase13_new_customer_pipeline():
         conn.close()
 
         order = so.create_order_from_quote(quote_id, delivery_location=FACTORY,
-            delivery_geo="10.7976,76.7430", requested_delivery_date=c["delivery_date"],
+            delivery_geo=_geo(FACTORY), requested_delivery_date=c["delivery_date"],
             notes=f"{c['name'].title()} — fleet expansion")
 
         lines = pb.explode_bundle("BDL-00001", multiplier=c["qty"])
         pr_lines = [{"vendor": l["vendor"], "mat_code": l["code"], "mat_desc": l["desc"],
                     "uom": l["uom"], "qty": l["qty"], "req_date": c["pr_date"],
-                    "deliv_loc": FACTORY, "deliv_geo": "10.7976,76.7430"} for l in lines]
+                    "deliv_loc": FACTORY, "deliv_geo": _geo(FACTORY)} for l in lines]
         pc.create_pr(c["pr_number"], requester_id="REQ-PROD", requester_name="Production Planning",
                     requester_dept="Manufacturing", project_id=c["project_id"], lines=pr_lines,
                     pr_date=c["pr_date"])

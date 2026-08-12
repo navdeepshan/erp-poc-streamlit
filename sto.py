@@ -116,7 +116,9 @@ def create_sto_from_allocation(mat_code, mat_desc, hub_location, allocation_line
         finally:
             conn.close()
         results.append({"to_location": line["to_location"], "allocated_qty": line["allocated_qty"],
-                        "transfer_id": transfer_id})
+                        "transfer_id": transfer_id,
+                        "eway_bill_number": (inv.get_stock_transfer(transfer_id, data_file)
+                                            or {}).get("eway_bill_number") if transfer_id else None})
 
     # Real freight GL posting, scoped deliberately narrow: a self-contained,
     # balanced freight entry (Dr 5100 Freight Expense / Cr 2110 Freight

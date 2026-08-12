@@ -238,6 +238,11 @@ def record_shipment(fulfillment_id, line_qty_shipped, carrier="", tracking_ref="
     finally:
         conn.close()
 
+    import reservation as res
+    import backorder as bo_mod
+    so_items_by_mat = {i["mat_code"]: i for i in so.get_order_items(f["so_id"], fpath)}
+    atp_notes = []
+
     for mat, qty in line_qty_shipped.items():
         if qty <= 0:
             continue
@@ -252,7 +257,41 @@ def record_shipment(fulfillment_id, line_qty_shipped, carrier="", tracking_ref="
                 f"{mat} at {f['delivery_location']} is now {new_balance:g} — this shipment "
                 f"posted against stock the ledger didn't actually show as available.")
 
-    return {"warnings": goods_issue_warnings}
+        # Real fix for a real, found gap: this shipment is the actual real-
+        # world event a Reservation was always meant to be Consumed by, and
+        # the actual real-world event that should resolve any Backorder for
+        # the same line — until now, neither ever happened, so a fully,
+        # physically delivered order's own original shortfall just sat in
+        # Backorders forever, Open, long after the customer had the goods.
+        so_item = so_items_by_mat.get(mat)
+        qty_beyond_reservation = qty
+        if so_item and so_item.get("reservation_id"):
+            reservation = res.get_reservation(so_item["reservation_id"])
+            if reservation and reservation["status"] == "Open":
+                if qty >= reservation["quantity"] - 0.005:
+                    res.consume_reservation(so_item["reservation_id"])
+                    qty_beyond_reservation = round(qty - reservation["quantity"], 3)
+                    atp_notes.append(f"{mat}: reservation {so_item['reservation_id']} consumed.")
+                else:
+                    # A genuine partial shipment of an already-promised line —
+                    # a real, honest, narrower limitation: this reservation
+                    # stays Open rather than being split, since partial
+                    # consumption of a single reservation isn't built. None
+                    # of this shipment reaches into backorder territory in
+                    # this branch, since the whole shipped amount is still
+                    # covered by what's already reserved.
+                    qty_beyond_reservation = 0
+                    atp_notes.append(f"{mat}: partial shipment within an already-open "
+                                     f"reservation — reservation left Open (real, narrower "
+                                     f"limitation; not split).")
+        if so_item and so_item.get("backorder_id") and qty_beyond_reservation > 0:
+            result = bo_mod.resolve_backorder_via_shipment(so_item["backorder_id"],
+                                                            qty_beyond_reservation)
+            if result:
+                atp_notes.append(f"{mat}: backorder {so_item['backorder_id']} now "
+                                 f"{result['new_status']} ({result['new_open_qty']:g} still open).")
+
+    return {"warnings": goods_issue_warnings, "atp_notes": atp_notes}
 
 
 def record_delivery(fulfillment_id, pod_reference="", data_file=None):
@@ -292,6 +331,35 @@ def cancel_fulfillment(fulfillment_id, reason="", data_file=None):
 
     _set_field(fulfillment_id, {"Status": "Cancelled",
         "Notes": f"{(f or {}).get('notes','') or ''} | Cancelled: {reason}".strip(" |")}, data_file)
+
+
+def update_dispatch_tracking(fulfillment_id, tracking_ref, carrier=None, data_file=None):
+    """
+    Persists a real courier tracking reference onto an already-shipped
+    fulfillment, after the fact — mirrors inventory.py's own
+    update_transfer_tracking() exactly: record_shipment() only ever
+    sets carrier/tracking_ref at ship time (often blank, pending a real
+    courier booking via shipping.submit_batch_to_courier()), and
+    nothing updated it afterward until now. carrier is optional — only
+    overwritten if explicitly passed, so this can't accidentally blank
+    out a carrier already correctly set at ship time (a pinned
+    preference).
+    """
+    conn = db.get_connection()
+    try:
+        if carrier is not None:
+            conn.execute(
+                "UPDATE fulfillments SET tracking_ref=?, carrier=? WHERE fulfillment_id=?",
+                (tracking_ref, carrier, fulfillment_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE fulfillments SET tracking_ref=? WHERE fulfillment_id=?",
+                (tracking_ref, fulfillment_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _set_field(fulfillment_id, field_values, data_file=None):

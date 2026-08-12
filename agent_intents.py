@@ -32,6 +32,7 @@ import pr_consolidation as pc
 import bom
 import org_defaults as od
 import inventory as inv
+import nav_catalog as nav
 
 STOPWORDS = {"the", "a", "an", "to", "of", "for", "and", "some", "any", "extra",
             "those", "this", "that", "please", "can", "you", "i", "want", "need",
@@ -91,6 +92,27 @@ INTENTS = [
      "phrases": ["switch to", "switch mode", "use mode", "change mode",
                 "change the mode", "plan without"],
      "keywords": []},
+
+    # Real scope expansion (2026-08-11), by direct instruction: this
+    # console was originally scoped to inventory optimization + order
+    # upload only (see this module's and agent_console.py's own
+    # docstrings), deliberately not "the whole platform." Recognizing
+    # every real screen name across all three core apps is a genuine
+    # widening of that boundary, not a small addition — worth naming,
+    # not silently folded in as if it were always in scope.
+    {"name": "navigate",
+     "phrases": ["show me", "take me to", "go to", "navigate to",
+                "open the", "where is", "wheres", "where's",
+                "which screen", "which tab", "how do i get to",
+                "how do i find"],
+     # Weighted higher than the default 1, same real reason as ship_
+     # transfer/receive_transfer/create_pr above: "open RFx Management"
+     # (the verb immediately followed by a proper screen name, no
+     # "the" in between) matched none of the phrase triggers and
+     # scored only 1 point from the bare "open" keyword, below
+     # MIN_CONFIDENCE — the identical gap class, found by the same
+     # kind of direct test, not by inspection.
+     "keywords": ["open", "screen"], "keyword_weight": 2},
 
     {"name": "upload_orders",
      "phrases": ["upload orders", "bulk load", "bulk import", "order data",
@@ -259,6 +281,58 @@ def resolve_location(text, data_file=None):
     scored.sort(key=lambda x: -x[0])
     top_score = scored[0][0]
     tied = [loc for score, loc in scored if score == top_score]
+    if len(tied) > 1:
+        return {"match": None, "candidates": tied}
+    return {"match": tied[0], "candidates": []}
+
+
+def resolve_screen(text):
+    """
+    Fuzzy-matches free text against every real page and tab name across
+    all three core apps (nav_catalog.py's own single source of truth)
+    — same whole-word overlap approach and same {"match", "candidates"}
+    shape as resolve_material()/resolve_location() above.
+
+    A tab's own haystack is its tab name alone, not combined with its
+    parent page's name, and every real page/tab entry (across every
+    app) competes in one single pool, on real score alone — a page
+    with a genuinely stronger match (e.g. "Vendor Onboarding", scoring
+    2 for matching both real words) correctly beats an unrelated tab
+    that only weakly overlaps (e.g. Accounting's own "Vendor Invoices"
+    tab, scoring 1 for "vendor" alone) rather than a blanket rule
+    always preferring any tab over any page regardless of score — found
+    directly as a real false positive, not assumed: an early version
+    that unconditionally preferred tabs sent "take me to Vendor
+    Onboarding" to Accounting's Vendor Invoices tab instead of the real
+    Vendor Onboarding page.
+
+    The one real tie-break applied: when the top score is shared
+    between a tab and that *same tab's own parent page* (e.g. "take me
+    to Inventory Position" scores the bare Inventory page and its own
+    Position & Transfers tab equally), the bare page is dropped from
+    that tie and the tab wins — a query specific enough to also name a
+    real tab most likely means that tab, not just its page. An
+    unrelated page that happens to tie at the same score is never
+    dropped by this rule, only a tied entry's own parent.
+    """
+    screens = nav.all_screens()
+    words = set(_tokenize(text))
+    if not words:
+        return {"match": None, "candidates": []}
+    scored = []
+    for s in screens:
+        name = s["tab"] if s["tab"] else s["page_label"]
+        haystack_words = set(_tokenize(name))
+        score = len(words & haystack_words)
+        if score > 0:
+            scored.append((score, s))
+    if not scored:
+        return {"match": None, "candidates": []}
+    top_score = max(sc for sc, _ in scored)
+    tied = [s for sc, s in scored if sc == top_score]
+    tied_tab_parents = {(s["app"], s["page_key"]) for s in tied if s["tab"] is not None}
+    tied = [s for s in tied
+            if s["tab"] is not None or (s["app"], s["page_key"]) not in tied_tab_parents]
     if len(tied) > 1:
         return {"match": None, "candidates": tied}
     return {"match": tied[0], "candidates": []}

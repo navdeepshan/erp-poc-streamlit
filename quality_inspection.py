@@ -43,6 +43,27 @@ used to read GR_Items directly (a second, independent implementation
 of "read GR_Items" alongside goods_receipt.py's own) — it now delegates
 to goods_receipt.get_gr_items_index(), so GR_Items has exactly one
 reader in the whole codebase.
+
+Quality Hold (QHD-US-01 extension, 2026-08-09): a real, corrective
+change — until now, "Failed" was recorded here but never actually
+excluded from available on-hand, meaning a Sales Order could genuinely
+reserve or ship material that had already failed inbound inspection.
+Fixed the same way ship_transfer()'s own Transfer Out already handles
+a real physical state change: record_inspection() now posts a real
+"Quality Hold" transaction against inventory.py's own ledger for
+whatever quantity is newly failed (a signed delta, so a correction to
+an existing inspection can move the held quantity up or down before
+any disposition exists). Because inventory.get_balance() is what every
+"available" calculation in this codebase already reads from (ATP's
+reservation check, ship_transfer()'s own eligibility check, every
+bom.py position function), this one change makes all of them correctly
+exclude quality-held stock with no separate exclusion term threaded
+into any of them — the same reasoning that already makes In Transit
+work without its own bucket. A real quality_holds table tracks
+disposition state (Held -> Return to Vendor or Scrap) since that's a
+business decision with its own real GL consequence, not a physical
+ledger movement — see dispose_quality_hold() and rtv.py (RTV-US-01)
+for the physical-return half of this story.
 """
 
 import os, io
@@ -54,6 +75,7 @@ from openpyxl.utils import get_column_letter
 
 import db
 import goods_receipt as gr
+import inventory as inv
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.xlsx")
 
@@ -271,10 +293,22 @@ def record_inspection(gr_id, po_item, qty_passed, qty_failed, inspected_by="", n
     conn = db.get_connection()
     try:
         existing = conn.execute(
-            "SELECT qi_id FROM quality_inspections WHERE gr_id = ? AND po_item = ?",
+            "SELECT qi_id, qty_failed FROM quality_inspections WHERE gr_id = ? AND po_item = ?",
             (gr_id, po_item),
         ).fetchone()
         qi_id = existing["qi_id"] if existing else _next_qi_id(conn)
+        old_qty_failed = (existing["qty_failed"] or 0) if existing else 0
+
+        if existing:
+            disposed = conn.execute(
+                "SELECT status FROM quality_holds WHERE qi_id=? AND status != 'Held'",
+                (qi_id,)).fetchone()
+            if disposed:
+                raise ValueError(f"{qi_id} already has a disposition on file "
+                                  f"({disposed['status']}) — re-inspecting a disposed line "
+                                  f"isn't allowed. A correction needs an explicit reversal, "
+                                  f"never a silent edit.")
+
         conn.execute(
             "INSERT INTO quality_inspections (qi_id, gr_id, po_number, line_item, po_item, "
             "material_code, material_desc, qty_received, qty_passed, qty_failed, inspected_by, "
@@ -290,7 +324,152 @@ def record_inspection(gr_id, po_item, qty_passed, qty_failed, inspected_by="", n
         conn.commit()
     finally:
         conn.close()
+
+    # Quality Hold: a Fail is a real physical state (quarantined stock),
+    # posted as a real inventory movement rather than a side-table exclusion
+    # term — see module docstring for why this is the whole fix. delta
+    # handles a genuine correction (still allowed pre-disposition, blocked
+    # above once disposed) moving the held quantity up or down, never
+    # assumes a re-inspection only ever increases it.
+    delta = round(qty_failed - old_qty_failed, 3)
+    if delta != 0:
+        inv.record_transaction(mat_code, item["mat_desc"], g["delivery_location"], -delta,
+                               "Quality Hold", reference_type="QualityInspection",
+                               reference_id=qi_id, notes=f"QC fail on {gr_id} line {po_item}",
+                               data_file=fpath)
+        conn = db.get_connection()
+        try:
+            hold = conn.execute(
+                "SELECT hold_id FROM quality_holds WHERE qi_id=? AND status='Held'",
+                (qi_id,)).fetchone()
+            if qty_failed > 0.001:
+                if hold:
+                    conn.execute("UPDATE quality_holds SET qty=? WHERE hold_id=?",
+                                (qty_failed, hold["hold_id"]))
+                else:
+                    hold_id = _next_hold_id(conn)
+                    conn.execute(
+                        "INSERT INTO quality_holds (hold_id, qi_id, gr_id, po_number, po_item, "
+                        "material_code, material_desc, location_id, qty, status, created_date) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                        (hold_id, qi_id, gr_id, g["po_number"], po_item, mat_code,
+                         item["mat_desc"], g["delivery_location"], qty_failed, "Held",
+                         date.today().strftime("%Y-%m-%d")))
+            elif hold:
+                # A correction eliminated the failure entirely -- the transaction
+                # above already restored the quantity to available; nothing left
+                # to hold, so the now-empty Held row is removed, not left at zero.
+                conn.execute("DELETE FROM quality_holds WHERE hold_id=?", (hold["hold_id"],))
+            conn.commit()
+        finally:
+            conn.close()
+
     return {"qi_id": qi_id, "status": _compute_status(qty_received, qty_passed, qty_failed)}
+
+
+# ── Quality Hold ────────────────────────────────────────────────────────────────
+def _next_hold_id(conn):
+    rows = conn.execute("SELECT hold_id FROM quality_holds WHERE hold_id LIKE 'QH-%'").fetchall()
+    mx = 0
+    for r in rows:
+        try: mx = max(mx, int(r["hold_id"].split("-")[1]))
+        except Exception: pass
+    return f"QH-{mx+1:05d}"
+
+
+def _row_to_hold(r):
+    """Normalizes to this codebase's established mat_code/mat_desc
+    convention (get_inspections(), get_fulfillment_items(), etc. all do
+    the same) — raw column names stay material_code/material_desc only
+    at the SQL layer, never in a dict a caller reads from."""
+    d = dict(r)
+    d["mat_code"] = d.pop("material_code")
+    d["mat_desc"] = d.pop("material_desc")
+    return d
+
+
+def get_quality_holds(status=None, data_file=None):
+    conn = db.get_connection()
+    try:
+        rows = conn.execute("SELECT * FROM quality_holds ORDER BY hold_id").fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        row = _row_to_hold(r)
+        if status and row["status"] != status:
+            continue
+        out.append(row)
+    return out
+
+
+def get_quality_hold(hold_id, data_file=None):
+    conn = db.get_connection()
+    try:
+        row = conn.execute("SELECT * FROM quality_holds WHERE hold_id=?", (hold_id,)).fetchone()
+    finally:
+        conn.close()
+    return _row_to_hold(row) if row else None
+
+
+def dispose_quality_hold(hold_id, disposition, disposed_by="", notes="", data_file=None):
+    """
+    All-or-nothing disposition per hold — matches this project's own
+    documented QHD-US-01/RTV-US-01 design (a single Return to Vendor or
+    Scrap decision per line, not a partial-quantity split). Once
+    disposed, record_inspection() refuses to re-inspect this same line
+    (see its own docstring) — a genuine correction after this point is
+    an explicit, separately-authorized reversal, never a silent edit.
+
+    Scrap posts a real GL write-off immediately, at the GR's own
+    received unit cost (the same valuation basis GR itself posted at):
+    Dr Scrap Expense (5200) / Cr Inventory Clearing (1200) — the
+    quantity already left available on-hand at hold time, so this is
+    purely a balance-sheet consequence, not a further ledger movement.
+
+    Return to Vendor posts no GL entry here at all — only moves the
+    hold into a state rtv.py's ship_return_to_vendor() can act on,
+    exactly mirroring GR/IR Clearing's own "don't assume resolution
+    prematurely" pattern: the real GL consequence is RTV-US-01's own,
+    posted only once the physical return shipment actually happens.
+    """
+    fpath = data_file or DATA_FILE
+    hold = get_quality_hold(hold_id, fpath)
+    if hold is None:
+        raise ValueError(f"{hold_id} not found.")
+    if hold["status"] != "Held":
+        raise ValueError(f"{hold_id} is '{hold['status']}' — only a Held quantity can be disposed.")
+    if disposition not in ("Return to Vendor", "Scrap"):
+        raise ValueError(f"Unknown disposition '{disposition}' — must be 'Return to Vendor' or 'Scrap'.")
+
+    je_id = None
+    if disposition == "Scrap":
+        gr_items = {i["po_item"]: i for i in gr.get_gr_items(hold["gr_id"], fpath)}
+        unit_price = (gr_items.get(hold["po_item"]) or {}).get("unit_price") or 0
+        write_off_value = round(unit_price * hold["qty"], 2)
+        if write_off_value > 0:
+            import accounting as acct
+            je_id = acct.post_journal_entry(
+                "QualityHold", hold_id,
+                f"{hold_id} — Scrap write-off, {hold['mat_desc']} ({hold['qty']:g} units)",
+                [{"account_code": "5200", "debit": write_off_value, "credit": 0,
+                  "description": f"{hold['mat_desc']} scrapped from {hold['gr_id']}"},
+                 {"account_code": "1200", "debit": 0, "credit": write_off_value,
+                  "description": f"Inventory Clearing write-off — {hold_id}"}],
+                data_file=fpath)
+
+    new_status = "Scrapped" if disposition == "Scrap" else "Pending RTV Shipment"
+    conn = db.get_connection()
+    try:
+        conn.execute(
+            "UPDATE quality_holds SET status=?, disposed_date=?, disposed_by=?, "
+            "disposition_notes=? WHERE hold_id=?",
+            (new_status, date.today().strftime("%Y-%m-%d"), disposed_by, notes, hold_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"hold_id": hold_id, "status": new_status, "je_id": je_id}
 
 
 # ── Document generation ───────────────────────────────────────────────────────

@@ -156,6 +156,10 @@ def create_reservation_up_to(mat_code, mat_desc, location_id, requested_qty, so_
     if requested_qty <= 0:
         raise ValueError("Requested quantity must be positive.")
 
+    import org_defaults as od
+    od.validate_atp_policy("Concurrency Guarantee Level", data_file=data_file)
+    od.validate_atp_policy("Reservation Granularity", data_file=data_file)
+
     conn = db.get_connection()  # data_file intentionally ignored -- see module docstring
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -256,6 +260,23 @@ def release_reservation(reservation_id, reason="", data_file=None):
     stops counting against it immediately, with no separate step).
     Rejected against an already-Consumed reservation — real,
     physically-picked stock cannot be un-consumed by a release.
+
+    Also re-triggers backorder.reevaluate_backorders() for this same
+    (material, location) — found and wired in 2026-08-11, a real gap,
+    not new policy: a released reservation genuinely increases real
+    Available-to-Promise, the same way a Goods Receipt or a transfer
+    Confirm Receipt does, and those two already trigger this same
+    re-check. Without it, releasing a reservation only helped a *future*
+    order's own real-time ATP check — an *already-open* backorder for
+    the same material/location would sit Open forever waiting for
+    unrelated new supply, even though the stock it needs was sitting
+    right there the whole time. Callers that are about to cancel this
+    same reservation's own Sales Order's own backorder too (see
+    sales_order.cancel_order()) must do that cancellation first — this
+    re-check runs against whatever's still genuinely Open/Partially
+    Fulfilled at the moment it's called, and a backorder about to be
+    cancelled anyway shouldn't get a split-second reservation of its own
+    only to have that reservation immediately orphaned.
     """
     r = get_reservation(reservation_id, data_file)
     if r is None:
@@ -276,7 +297,10 @@ def release_reservation(reservation_id, reason="", data_file=None):
         conn.commit()
     finally:
         conn.close()
-    return {"reservation_id": reservation_id, "status": "Released"}
+
+    import backorder as bo
+    touched = bo.reevaluate_backorders(r["material_code"], r["location_id"], data_file)
+    return {"reservation_id": reservation_id, "status": "Released", "backorders_reevaluated": touched}
 
 
 def get_available_to_promise(mat_code, location_id, data_file=None):

@@ -112,7 +112,7 @@ def _check_active_refs(conn, material_code, location_id):
 
 
 def record_transaction(material_code, material_desc, location_id, quantity, txn_type,
-                       reference_type="", reference_id="", notes="", data_file=None):
+                       reference_type="", reference_id="", notes="", lot_id=None, data_file=None):
     """
     quantity: signed — positive for stock in, negative for stock out.
     location_id: should be a real Delivery_Locations location_id (e.g.
@@ -146,6 +146,12 @@ def record_transaction(material_code, material_desc, location_id, quantity, txn_
     safe. `notes` gets any warnings appended automatically, so they're
     visible on the ledger row itself even if the caller doesn't check
     the return value.
+
+    lot_id (TRC-US-01, 2026-08-09): optional, references traceability.py's
+    own `lots.id` — every existing caller leaves this NULL, exactly the
+    same as before this column existed. A lot's own remaining quantity is
+    never stored anywhere; it's this same ledger, summed with an extra
+    WHERE lot_id=? — see traceability.get_lot_remaining_qty().
     """
     if not quantity:
         raise ValueError("Transaction quantity can't be zero — nothing happened.")
@@ -163,11 +169,11 @@ def record_transaction(material_code, material_desc, location_id, quantity, txn_
         txn_id = _next_txn_id(conn)
         conn.execute(
             "INSERT INTO inventory_transactions (txn_id, txn_date, material_code, material_desc, "
-            "location_id, location_name, quantity, txn_type, reference_type, reference_id, notes) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "location_id, location_name, quantity, txn_type, reference_type, reference_id, notes, "
+            "lot_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (txn_id, date.today().strftime("%Y-%m-%d"), material_code, material_desc,
              location_id, location_name, round(quantity, 3), txn_type, reference_type,
-             reference_id, full_notes),
+             reference_id, full_notes, lot_id),
         )
         conn.commit()
     finally:
@@ -187,8 +193,21 @@ def _next_transfer_id(conn):
 
 
 def ship_transfer(mat_code, mat_desc, from_location, to_location, qty,
-                  shipped_by="", carrier="", tracking_ref="", notes="", data_file=None):
+                  shipped_by="", carrier="", tracking_ref="", notes="",
+                  lot_id=None, fefo_override_reason="", data_file=None):
     """
+    lot_id (TRC-US-01, 2026-08-09): optional — when the material is
+    Batch/Serial-tracked, the caller (mfg_ui.py's own Position &
+    Transfers tab) calls traceability.suggest_fefo_lot() first and
+    passes the chosen lot here, so the OUT transaction (and, once
+    receive_transfer() runs, the matching IN transaction) both carry
+    the same real lot identity. fefo_override_reason is recorded
+    verbatim, never validated against the suggestion here — this
+    function has no way to know what was suggested; that comparison
+    only makes sense at the UI layer that saw both. Departing from
+    FEFO is always allowed, per the document's own rule; this is
+    where the reason lands, not a gate.
+
     Stage 1 of a real Stock Transfer: posts Transfer Out at the source
     only. Stock leaves from_location immediately (its balance drops
     right away) but does NOT arrive at to_location until
@@ -234,6 +253,17 @@ def ship_transfer(mat_code, mat_desc, from_location, to_location, qty,
     available = get_balance(mat_code, from_location, data_file)
     if qty > available + 0.005:
         raise ValueError(f"Only {available:g} available at {from_location} — can't ship {qty:g}.")
+    if lot_id is not None:
+        import traceability as trc
+        # Checked at from_location specifically, not the lot's global
+        # total — a real bug fixed here: a lot can genuinely span more
+        # than one location once part of it has already transferred,
+        # and a global check would wrongly allow shipping more from
+        # here than this location's own real share of the lot.
+        lot_remaining = trc.get_lot_remaining_qty(lot_id, from_location, data_file)
+        if qty > lot_remaining + 0.005:
+            raise ValueError(f"Only {lot_remaining:g} remaining in this lot at "
+                             f"{from_location} — can't ship {qty:g} from it.")
 
     conn = db.get_connection()
     try:
@@ -243,7 +273,7 @@ def ship_transfer(mat_code, mat_desc, from_location, to_location, qty,
 
     out_result = record_transaction(mat_code, mat_desc, from_location, -qty, "Transfer Out",
                                      reference_type="Transfer", reference_id=transfer_id,
-                                     notes=notes, data_file=data_file)
+                                     notes=notes, lot_id=lot_id, data_file=data_file)
 
     import eway_bill as ewb
     import po_export
@@ -260,11 +290,12 @@ def ship_transfer(mat_code, mat_desc, from_location, to_location, qty,
         conn.execute(
             "INSERT INTO stock_transfers (transfer_id, material_code, material_desc, uom, "
             "quantity, from_location, to_location, status, shipped_date, shipped_by, "
-            "carrier, tracking_ref, notes, source_type, gl_goods_value, gl_igst_amount) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "carrier, tracking_ref, notes, source_type, gl_goods_value, gl_igst_amount, "
+            "lot_id, fefo_override_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (transfer_id, mat_code, mat_desc, _uom_for(mat_code, data_file), qty,
              from_location, to_location, "In Transit", str(date.today()), shipped_by,
-             carrier, tracking_ref, notes, "Ad Hoc", goods_value, igst_amount),
+             carrier, tracking_ref, notes, "Ad Hoc", goods_value, igst_amount,
+             lot_id, fefo_override_reason),
         )
         conn.commit()
     finally:
@@ -396,7 +427,8 @@ def receive_transfer(transfer_id, received_qty=None, received_by="", notes="",
 
     in_result = record_transaction(t["material_code"], t["material_desc"], t["to_location"],
                                    qty, "Transfer In", reference_type="Transfer",
-                                   reference_id=transfer_id, notes=notes, data_file=data_file)
+                                   reference_id=transfer_id, notes=notes,
+                                   lot_id=t.get("lot_id"), data_file=data_file)
 
     conn = db.get_connection()
     try:
