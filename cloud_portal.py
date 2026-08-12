@@ -33,11 +33,11 @@ st.markdown("""
 
 <div class="section">Core business operations</div>
 <div class="grid">
-  <a class="card" href="https://navdeep-erp-s2p.streamlit.app/" target="_self"><span class="arrow">↗</span><div class="icon">📋</div><strong>Source to Pay</strong><span>Purchase requests, consolidation, RFx, vendors, contracts, and purchase orders.</span></a>
-  <a class="card" href="https://navdeep-erp-mfg.streamlit.app/" target="_self"><span class="arrow">↗</span><div class="icon">⚙️</div><strong>Manufacturing</strong><span>Goods receipt, quality, BOM planning, production, inventory, transfers, and traceability.</span></a>
-  <a class="card" href="https://erp-poc-app-joy6baexqfpzvxfffy4bc2.streamlit.app/" target="_self"><span class="arrow">↗</span><div class="icon">🛒</div><strong>Order to Cash</strong><span>Customers, quotations, orders, fulfilment, billing, collections, returns, and accounting.</span></a>
-  <a class="card" href="https://navdeep-erp-control-tower.streamlit.app/" target="_self"><span class="arrow">↗</span><div class="icon">◉</div><strong>Exception Control Tower</strong><span>A single prioritized worklist of live operational exceptions across the platform.</span></a>
-  <a class="card agent" href="https://navdeep-erp-agent.streamlit.app/" target="_self"><span class="arrow">↗</span><div class="icon">✦</div><strong>Agent Console</strong><span>Ask operational questions and navigate the ERP through the conversational interface.</span></a>
+  <a class="card" href="https://navdeep-erp-s2p.streamlit.app/" target="_top"><span class="arrow">↗</span><div class="icon">📋</div><strong>Source to Pay</strong><span>Purchase requests, consolidation, RFx, vendors, contracts, and purchase orders.</span></a>
+  <a class="card" href="https://navdeep-erp-mfg.streamlit.app/" target="_top"><span class="arrow">↗</span><div class="icon">⚙️</div><strong>Manufacturing</strong><span>Goods receipt, quality, BOM planning, production, inventory, transfers, and traceability.</span></a>
+  <a class="card" href="https://erp-poc-app-joy6baexqfpzvxfffy4bc2.streamlit.app/" target="_top"><span class="arrow">↗</span><div class="icon">🛒</div><strong>Order to Cash</strong><span>Customers, quotations, orders, fulfilment, billing, collections, returns, and accounting.</span></a>
+  <a class="card" href="https://navdeep-erp-control-tower.streamlit.app/" target="_top"><span class="arrow">↗</span><div class="icon">◉</div><strong>Exception Control Tower</strong><span>A single prioritized worklist of live operational exceptions across the platform.</span></a>
+  <a class="card agent" href="https://navdeep-erp-agent.streamlit.app/" target="_top"><span class="arrow">↗</span><div class="icon">✦</div><strong>Agent Console</strong><span>Ask operational questions and navigate the ERP through the conversational interface.</span></a>
 </div>
 <div class="note">Select a workspace to continue · Use your browser Back button to return to this launchpad</div>
 """, unsafe_allow_html=True)
